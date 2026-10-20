@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>fuzzy-matcher demo</title>
+  <link rel="stylesheet" href="fuzzy.css" />
+</head>
+<body>
+  <main class="app">
+    <h1>fuzzy-matcher</h1>
+    <p class="subtitle">
+      Type to fuzzy-search a list of Indian cities. Characters need not be
+      contiguous — try <code>blr</code>, <code>mum</code>, or <code>newd</code>.
+    </p>
+
+    <label class="search-box">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="11" cy="11" r="7" />
+        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+      </svg>
+      <input id="query" type="search" placeholder="Search cities…" autocomplete="off" autofocus />
+    </label>
+
+    <div class="meta">
+      <span id="count"></span>
+      <span>ranked best-match first</span>
+    </div>
+
+    <ul id="results" class="results" aria-live="polite"></ul>
+  </main>
+
+  <script type="module">
+    import { search, highlightSegments } from "./fuzzy.js";
+
+    const CITIES = [
+      { city: "Mumbai", state: "Maharashtra" },
+      { city: "Delhi", state: "Delhi" },
+      { city: "Bengaluru", state: "Karnataka" },
+      { city: "Hyderabad", state: "Telangana" },
+      { city: "Ahmedabad", state: "Gujarat" },
+      { city: "Chennai", state: "Tamil Nadu" },
+      { city: "Kolkata", state: "West Bengal" },
+      { city: "Pune", state: "Maharashtra" },
+      { city: "Jaipur", state: "Rajasthan" },
+      { city: "Surat", state: "Gujarat" },
+      { city: "Lucknow", state: "Uttar Pradesh" },
+      { city: "Kanpur", state: "Uttar Pradesh" },
+      { city: "Nagpur", state: "Maharashtra" },
+      { city: "Indore", state: "Madhya Pradesh" },
+      { city: "Thane", state: "Maharashtra" },
+      { city: "Bhopal", state: "Madhya Pradesh" },
+      { city: "Visakhapatnam", state: "Andhra Pradesh" },
+      { city: "Patna", state: "Bihar" },
+      { city: "Vadodara", state: "Gujarat" },
+      { city: "Guwahati", state: "Assam" },
+      { city: "New Delhi", state: "Delhi" },
+      { city: "Navi Mumbai", state: "Maharashtra" },
+    ];
+
+    const input = document.getElementById("query");
+    const list = document.getElementById("results");
+    const count = document.getElementById("count");
+
+    function escapeHtml(value) {
+      return value.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    }
+
+    function renderHighlighted(text, indices) {
+      return highlightSegments(text, indices)
+        .map((seg) => (seg.match ? `<mark>${escapeHtml(seg.text)}</mark>` : escapeHtml(seg.text)))
+        .join("");
+    }
+
+    function render() {
+      const query = input.value.trim();
+      const results = search(CITIES, query, { keys: ["city", "state"], limit: 12 });
+
+      count.textContent = query
+        ? `${results.length} match${results.length === 1 ? "" : "es"}`
+        : `${CITIES.length} cities`;
+
+      if (results.length === 0) {
+        list.innerHTML = `<li class="empty">No city matches “${escapeHtml(query)}”.</li>`;
+        return;
+      }
+
+      list.innerHTML = results
+        .map(({ item, score, key, indices }) => {
+          const cityIndices = key === "city" ? indices : [];
+          const stateIndices = key === "state" ? indices : [];
+          return `
+            <li>
+              <span>
+                <span class="city">${renderHighlighted(item.city, cityIndices)}</span>
+                <span class="state"> · ${renderHighlighted(item.state, stateIndices)}</span>
+              </span>
+              <span class="score">${score.toFixed(1)}</span>
+            </li>`;
+        })
+        .join("");
+    }
+
+    input.addEventListener("input", render);
+    render();
+  </script>
+</body>
+</html>

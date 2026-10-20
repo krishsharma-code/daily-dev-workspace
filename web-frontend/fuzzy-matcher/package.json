@@ -1,0 +1,11 @@
+{
+  "name": "fuzzy-matcher",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free fuzzy string matcher and ranker for the browser and Node.",
+  "main": "fuzzy.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}
