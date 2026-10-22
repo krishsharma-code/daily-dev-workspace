@@ -74,6 +74,30 @@ class TestToNumber:
     def test_non_numeric(self, value):
         assert to_number(value) is None
 
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "nan",
+            "NaN",
+            "inf",
+            "-inf",
+            "+inf",
+            "infinity",
+            "-Infinity",
+            "1e400",  # overflows to inf
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+        ],
+    )
+    def test_non_finite_is_rejected(self, value):
+        # A nan/inf leaking into a sum or average silently poisons the whole
+        # aggregate, so coercion must return None instead of the non-finite value.
+        assert to_number(value) is None
+
+    def test_overflowing_integer_string_is_rejected(self):
+        assert to_number("9" * 400) is None
+
 
 class TestNormalizePhone:
     @pytest.mark.parametrize(
@@ -93,6 +117,12 @@ class TestNormalizePhone:
 
     @pytest.mark.parametrize("value", ["12345", "12345678901234", "", "   ", None, True])
     def test_invalid(self, value):
+        assert normalize_phone(value) is None
+
+    @pytest.mark.parametrize("value", [9876543210.0, 12.5])
+    def test_floats_are_rejected(self, value):
+        # Only strings and integers are accepted; a float (even an integral one)
+        # is surfaced as None so the caller decides how to handle it.
         assert normalize_phone(value) is None
 
     def test_custom_country_code(self):
@@ -141,6 +171,15 @@ class TestCleanRecord:
         )
         assert cleaned == {"email": "a@b.com", "amount": 1000}
 
+    def test_transformer_rejects_non_finite(self):
+        # "inf" is not a missing token, so it reaches the transformer, which must
+        # turn it into None rather than letting the float through.
+        cleaned = clean_record({"amount": "inf"}, transformers={"amount": to_number})
+        assert cleaned == {"amount": None}
+
+    def test_empty_record_stays_empty(self):
+        assert clean_record({}) == {}
+
 
 class TestCleanRecords:
     def test_drops_empty_by_default(self):
@@ -183,6 +222,16 @@ class TestDedupeRecords:
         records = [{"tags": ["a", "b"]}, {"tags": ["a", "b"]}, {"tags": ["c"]}]
         assert dedupe_records(records) == [{"tags": ["a", "b"]}, {"tags": ["c"]}]
 
+    def test_mixed_type_keys_are_handled(self):
+        # ``sorted(record.items())`` used to raise TypeError on non-comparable
+        # keys; keys are now ordered by ``str(key)``.
+        records = [{1: "a", "b": "c"}, {1: "a", "b": "c"}]
+        assert dedupe_records(records) == [{1: "a", "b": "c"}]
+
+    def test_nested_values_compared_order_independently(self):
+        records = [{"m": {"x": 1, "y": 2}}, {"m": {"y": 2, "x": 1}}]
+        assert dedupe_records(records) == [{"m": {"x": 1, "y": 2}}]
+
 
 class TestMissingRequired:
     def test_reports_missing(self):
@@ -191,3 +240,13 @@ class TestMissingRequired:
 
     def test_all_present(self):
         assert missing_required({"a": 1, "b": "x"}, ["a", "b"]) == []
+
+    def test_custom_missing_tokens(self):
+        record = {"name": "Ada", "email": "nope"}
+        assert missing_required(record, ["name", "email"]) == []
+        assert missing_required(
+            record, ["name", "email"], missing_tokens={"nope"}
+        ) == ["email"]
+
+    def test_absent_field_is_missing(self):
+        assert missing_required({}, ["name"]) == ["name"]

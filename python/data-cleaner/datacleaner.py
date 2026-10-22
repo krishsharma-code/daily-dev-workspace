@@ -25,6 +25,7 @@ Run the tests with::
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -82,17 +83,27 @@ def is_missing(
 
 
 def to_number(value: Any) -> int | float | None:
-    """Coerce *value* to an ``int`` or ``float``, or ``None`` if it is not numeric.
+    """Coerce *value* to a finite ``int`` or ``float``, or ``None`` if it is not.
 
     Handles plain numbers, numeric strings with thousands separators or a
     leading currency symbol (``"1,234"`` -> ``1234``, ``"\u20b91,200"`` -> ``1200``),
-    and integral floats (``"12.0"`` -> ``12``). Booleans are deliberately
-    rejected because ``True == 1`` in Python and coercing them is almost never
-    what a data pipeline wants.
+    and integral floats (``"12.0"`` -> ``12``).
+
+    Non-finite values are rejected rather than passed through: ``float("nan")``,
+    ``float("inf")`` and their string spellings (``"nan"``, ``"inf"``,
+    ``"-infinity"``, or an overflow such as ``"1e400"``) all return ``None``.
+    A ``nan``/``inf`` that reaches a downstream sum or average silently poisons
+    the whole aggregate, so "not finite" is treated as "not a number" here.
+
+    Booleans are deliberately rejected because ``True == 1`` in Python and
+    coercing them is almost never what a data pipeline wants.
     """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
+        # ``int`` is always finite; guard the ``float`` case for nan/inf.
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
         return value
     if isinstance(value, str):
         cleaned = _NUMBER_NOISE_RE.sub("", value)
@@ -101,6 +112,8 @@ def to_number(value: Any) -> int | float | None:
         try:
             as_float = float(cleaned)
         except ValueError:
+            return None
+        if not math.isfinite(as_float):
             return None
         if as_float.is_integer():
             return int(as_float)
@@ -206,9 +219,17 @@ def clean_records(
 
 
 def _freeze(value: Any) -> Any:
-    """Return a hashable stand-in for *value* so it can go in a set."""
+    """Return a hashable, order-stable stand-in for *value* so it can go in a set."""
     if isinstance(value, Mapping):
-        return tuple(sorted((k, _freeze(v)) for k, v in value.items()))
+        # Sort by ``str(key)``: two records holding the same nested mapping must
+        # freeze identically regardless of insertion order, and sorting by the
+        # raw key would raise ``TypeError`` on a mapping with mixed key types.
+        return tuple(
+            sorted(
+                ((k, _freeze(v)) for k, v in value.items()),
+                key=lambda kv: str(kv[0]),
+            )
+        )
     if isinstance(value, (list, tuple, set, frozenset)):
         return tuple(_freeze(v) for v in value)
     return value
@@ -216,7 +237,9 @@ def _freeze(value: Any) -> Any:
 
 def _record_key(record: Mapping[str, Any], key_fields: Sequence[str] | None) -> tuple:
     if key_fields is None:
-        items = sorted(record.items())
+        # ``sorted(record.items())`` raises on mixed key types; sorting by
+        # ``str(key)`` keeps the order stable without that failure mode.
+        items = sorted(record.items(), key=lambda kv: str(kv[0]))
     else:
         items = [(field, record.get(field)) for field in key_fields]
     return tuple((field, _freeze(value)) for field, value in items)
@@ -244,7 +267,15 @@ def dedupe_records(
 
 
 def missing_required(
-    record: Mapping[str, Any], required: Sequence[str]
+    record: Mapping[str, Any],
+    required: Sequence[str],
+    *,
+    missing_tokens: Iterable[str] = DEFAULT_MISSING_TOKENS,
 ) -> list[str]:
-    """Return the *required* fields that are absent or missing in *record*."""
-    return [field for field in required if is_missing(record.get(field))]
+    """Return the *required* fields that are absent or missing in *record*.
+
+    A field counts as missing when it is absent from the mapping, or when its
+    value matches *missing_tokens* -- the same tokens :func:`clean_record` uses
+    by default -- so the two helpers agree on what "empty" means.
+    """
+    return [field for field in required if is_missing(record.get(field), missing_tokens)]
