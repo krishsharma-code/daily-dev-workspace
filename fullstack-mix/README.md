@@ -4,7 +4,8 @@ Mixed projects that combine a front end and a back end. Each project is split in
 
 ## Projects
 
-_No projects yet. Each new project gets its own subfolder here._
+- [`link-vault/`](link-vault/) — a self-hosted bookmark manager: a stdlib Python
+  server (SQLite + REST API) with a vanilla HTML/CSS/JS client.
 
 ## Conventions
 

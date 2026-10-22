@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Link Vault</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Link Vault</h1>
+    <p class="tagline">A tiny self-hosted bookmark manager.</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Add a link</h2>
+      <form id="link-form" autocomplete="off">
+        <div class="field">
+          <label for="url">URL</label>
+          <input id="url" name="url" type="text" placeholder="example.com" required />
+        </div>
+        <div class="field">
+          <label for="title">Title <span class="hint">(optional)</span></label>
+          <input id="title" name="title" type="text" placeholder="Readable name" />
+        </div>
+        <div class="field">
+          <label for="tags">Tags <span class="hint">(comma separated)</span></label>
+          <input id="tags" name="tags" type="text" placeholder="python, docs" />
+        </div>
+        <button type="submit">Save link</button>
+        <span id="form-status" class="status" role="status"></span>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Search title or URL" />
+        <input id="tag-filter" type="text" placeholder="Filter by tag" />
+        <button id="refresh" type="button" class="secondary">Refresh</button>
+      </div>
+      <p id="count" class="count"></p>
+      <ul id="links" class="links"></ul>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
