@@ -1,0 +1,11 @@
+{
+  "name": "color-kit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free colour parsing, conversion, blending and WCAG contrast utilities for the browser and Node.",
+  "main": "color-kit.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}

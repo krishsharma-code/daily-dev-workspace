@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>color-kit demo</title>
+  <link rel="stylesheet" href="color-kit.css" />
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>color-kit</h1>
+      <p class="subtitle">
+        Parse any colour notation, see its conversions, and check whether it is
+        readable. Everything is computed in the browser by
+        <code>color-kit.js</code>.
+      </p>
+    </header>
+
+    <section class="panel">
+      <label class="field">
+        <span>Colour</span>
+        <input id="notation" type="text" value="hsl(210, 60%, 40%)" spellcheck="false" autocomplete="off" />
+      </label>
+      <label class="field field--swatch">
+        <span>Pick</span>
+        <input id="picker" type="color" value="#2966a3" />
+      </label>
+      <p id="error" class="error" role="alert" hidden></p>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2>Preview</h2>
+        <div id="preview" class="preview">
+          <strong id="preview-title">Readable heading</strong>
+          <span id="preview-body">Body text on this background.</span>
+        </div>
+        <dl class="facts">
+          <dt>HEX</dt><dd id="f-hex">—</dd>
+          <dt>RGB</dt><dd id="f-rgb">—</dd>
+          <dt>HSL</dt><dd id="f-hsl">—</dd>
+          <dt>Ink</dt><dd id="f-ink">—</dd>
+        </dl>
+      </article>
+
+      <article class="card">
+        <h2>Contrast</h2>
+        <table class="contrast">
+          <thead>
+            <tr><th>Against</th><th>Ratio</th><th>AA</th><th>AAA</th></tr>
+          </thead>
+          <tbody id="contrast-body"></tbody>
+        </table>
+        <p class="note">AA needs 4.5:1 (3:1 large); AAA needs 7:1 (4.5:1 large).</p>
+      </article>
+
+      <article class="card card--wide">
+        <h2>Derived</h2>
+        <div id="ramps" class="ramps"></div>
+      </article>
+    </section>
+  </main>
+
+  <script type="module">
+    import {
+      parseColor,
+      toHex,
+      toRgbString,
+      toHslString,
+      lighten,
+      darken,
+      complement,
+      mix,
+      contrastRatio,
+      wcag,
+      readableTextColor,
+    } from "./color-kit.js";
+
+    const $ = (id) => document.getElementById(id);
+    const notation = $("notation");
+    const picker = $("picker");
+    const errorEl = $("error");
+
+    function ramp(label, colors) {
+      const cells = colors
+        .map((c) => {
+          const hex = toHex(c);
+          const ink = readableTextColor(c);
+          return `<span class="chip" style="background:${hex};color:${ink}" title="${hex}">${hex}</span>`;
+        })
+        .join("");
+      return `<div class="ramp"><h3>${label}</h3><div class="chips">${cells}</div></div>`;
+    }
+
+    function badge(pass) {
+      return `<span class="badge ${pass ? "badge--pass" : "badge--fail"}">${pass ? "Pass" : "Fail"}</span>`;
+    }
+
+    function render(color) {
+      const hex = toHex(color);
+      $("f-hex").textContent = hex;
+      $("f-rgb").textContent = toRgbString(color);
+      $("f-hsl").textContent = toHslString(color);
+
+      const ink = readableTextColor(color);
+      $("f-ink").textContent = ink;
+      const preview = $("preview");
+      preview.style.background = hex;
+      preview.style.color = ink;
+
+      picker.value = hex.slice(0, 7);
+
+      const rows = [
+        { name: "white", value: "#ffffff" },
+        { name: "black", value: "#000000" },
+        { name: "grey", value: "#808080" },
+      ]
+        .map(({ name, value }) => {
+          const normal = wcag(color, value);
+          const large = wcag(color, value, { large: true });
+          const swatch = `<span class="dot" style="background:${value}"></span>${name}`;
+          return `<tr>
+            <td>${swatch}</td>
+            <td class="ratio">${contrastRatio(color, value).toFixed(2)}:1</td>
+            <td>${badge(normal.aa)} <small>${large.aa ? "+large" : ""}</small></td>
+            <td>${badge(normal.aaa)} <small>${large.aaa ? "+large" : ""}</small></td>
+          </tr>`;
+        })
+        .join("");
+      $("contrast-body").innerHTML = rows;
+
+      const lightSteps = [0, 10, 20, 30, 40, 50].map((n) => lighten(color, n));
+      const darkSteps = [0, 10, 20, 30, 40, 50].map((n) => darken(color, n));
+      $("ramps").innerHTML = [
+        ramp("Lighten", lightSteps),
+        ramp("Darken", darkSteps),
+        ramp("Mix with white / black", [color, mix(color, "#ffffff", 0.5), mix(color, "#000000", 0.5)]),
+        ramp("Complement", [color, complement(color)]),
+      ].join("");
+    }
+
+    function update() {
+      try {
+        const color = parseColor(notation.value);
+        errorEl.hidden = true;
+        render(color);
+      } catch (err) {
+        errorEl.hidden = false;
+        errorEl.textContent = err.message;
+      }
+    }
+
+    notation.addEventListener("input", update);
+    picker.addEventListener("input", () => {
+      notation.value = picker.value;
+      update();
+    });
+
+    update();
+  </script>
+</body>
+</html>

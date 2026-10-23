@@ -1,0 +1,252 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #1b1f24;
+  --muted: #5c6672;
+  --line: #dfe3e8;
+  --accent: #2867a3;
+  --pass-bg: #e3f4e6;
+  --pass-ink: #17663a;
+  --fail-bg: #fbe6e6;
+  --fail-ink: #a12626;
+  --radius: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 2rem 1rem 4rem;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.app {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.75rem;
+}
+
+.subtitle {
+  margin: 0 0 1.5rem;
+  color: var(--muted);
+  max-width: 60ch;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-end;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1 1 320px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.field input[type="text"] {
+  padding: 0.6rem 0.7rem;
+  font: 1rem ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.field--swatch {
+  flex: 0 0 auto;
+}
+
+.field input[type="color"] {
+  width: 64px;
+  height: 42px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+}
+
+.error {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--fail-ink);
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.2rem;
+}
+
+.card--wide {
+  grid-column: 1 / -1;
+}
+
+.card h2 {
+  margin: 0 0 0.85rem;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.preview {
+  border-radius: 10px;
+  padding: 1.1rem 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.preview strong {
+  font-size: 1.15rem;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 0.9rem;
+  margin: 1rem 0 0;
+  font-size: 0.9rem;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.facts dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+table.contrast {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+table.contrast th,
+table.contrast td {
+  text-align: left;
+  padding: 0.45rem 0.4rem;
+  border-bottom: 1px solid var(--line);
+}
+
+table.contrast th {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ratio {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dot {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-right: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  vertical-align: -1px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.badge--pass {
+  background: var(--pass-bg);
+  color: var(--pass-ink);
+}
+
+.badge--fail {
+  background: var(--fail-bg);
+  color: var(--fail-ink);
+}
+
+.note {
+  margin: 0.7rem 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.ramps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.ramp h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 5.5rem;
+  padding: 0.5rem 0.4rem;
+  border-radius: 8px;
+  font: 0.72rem ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid rgb(0 0 0 / 0.08);
+}
+
+@media (max-width: 620px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
