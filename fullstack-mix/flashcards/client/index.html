@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flashcards</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Flashcards</h1>
+    <p class="tagline">Spaced repetition in your browser &mdash; standard library only.</p>
+    <div class="stats" id="stats" aria-live="polite"></div>
+  </header>
+
+  <main>
+    <section class="panel" aria-labelledby="add-heading">
+      <h2 id="add-heading">Add a card</h2>
+      <form id="add-form" class="add-form">
+        <label>
+          Deck
+          <input type="text" id="deck" name="deck" placeholder="default" autocomplete="off" />
+        </label>
+        <label>
+          Front
+          <textarea id="front" name="front" rows="2" required placeholder="What is the capital of Japan?"></textarea>
+        </label>
+        <label>
+          Back
+          <textarea id="back" name="back" rows="2" required placeholder="Tokyo"></textarea>
+        </label>
+        <button type="submit">Add card</button>
+      </form>
+    </section>
+
+    <section class="panel" aria-labelledby="study-heading">
+      <h2 id="study-heading">Study</h2>
+      <div class="study-controls">
+        <label>
+          Deck
+          <select id="deck-filter">
+            <option value="">All decks</option>
+          </select>
+        </label>
+        <button type="button" id="start-study">Study due cards</button>
+      </div>
+      <div id="study-area" class="study-area" hidden>
+        <p class="study-deck" id="study-deck"></p>
+        <p class="study-front" id="study-front"></p>
+        <p class="study-back" id="study-back" hidden></p>
+        <div class="study-actions">
+          <button type="button" id="show-answer">Show answer</button>
+          <div id="quality-buttons" class="quality" hidden>
+            <span>How well did you recall it?</span>
+            <button type="button" data-quality="0">0 Blackout</button>
+            <button type="button" data-quality="1">1 Wrong</button>
+            <button type="button" data-quality="2">2 Hard</button>
+            <button type="button" data-quality="3">3 Ok</button>
+            <button type="button" data-quality="4">4 Good</button>
+            <button type="button" data-quality="5">5 Easy</button>
+          </div>
+        </div>
+      </div>
+      <p id="study-empty" class="muted">No cards due right now. Add one, or come back later.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="all-heading">
+      <h2 id="all-heading">All cards</h2>
+      <ul id="card-list" class="card-list"></ul>
+      <p id="list-empty" class="muted">Nothing here yet.</p>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
