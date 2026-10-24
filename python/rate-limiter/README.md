@@ -33,8 +33,27 @@ deterministic and no test ever sleeps in real time.
 | `remaining()` | Admissions still available in the current window. |
 | `reset()` | Forget all recorded admissions. |
 
-Invalid arguments (`capacity <= 0`, `tokens` above the capacity/limit, a
-negative timeout, ...) raise `ValueError`.
+## Validation
+
+Invalid arguments raise `ValueError`:
+
+- non-positive or non-finite values (`capacity <= 0`, `window <= 0`,
+  `nan`, `inf`, ...);
+- `tokens` above the `capacity` / `limit`, or non-finite / non-positive;
+- a negative `timeout`.
+
+Non-finite parameters are rejected deliberately rather than tolerated: a
+`nan` capacity yields a bucket that silently never admits, and an `inf` window
+yields a counter that never expires, so both fail fast at construction instead
+of at the first request.
+
+## Concurrency
+
+The limiters are **not thread-safe**. Each mutates its own state (the token
+count and last-refill timestamp, or the events deque) without locking, so a
+single instance shared across threads can over-admit. Give each thread its own
+instance, or serialise calls behind your own lock. They are deliberately
+lock-free so callers that don't need thread safety pay nothing for it.
 
 ## Layout
 

@@ -16,6 +16,22 @@ Time is read through an injectable ``clock`` (defaulting to
 from a fake clock in tests, so behaviour is deterministic and no test ever has
 to sleep in real time.
 
+Every numeric argument -- ``capacity``, ``refill_rate``, ``window``, ``limit``
+and the per-call ``tokens`` -- must be **finite** and positive. ``nan`` and
+``inf`` are rejected with :class:`ValueError`. A non-finite parameter would
+otherwise build a limiter that silently never admits (``capacity=nan``) or
+never expires (``window=inf``), which is far harder to debug than an immediate
+error.
+
+Concurrency
+-----------
+These limiters are **not thread-safe**. Each keeps mutable state -- the token
+count and ``_last`` timestamp, or the ``_events`` deque -- that a single thread
+mutates without locking, so sharing one instance across threads can over-admit.
+Either give each thread its own instance or serialise the calls behind your own
+lock. The primitives are deliberately lock-free so a caller that does not need
+thread safety pays nothing for it.
+
 Public API
 ----------
 - :class:`RateLimitExceeded`
@@ -31,6 +47,7 @@ Run the demo and the tests with::
 
 from __future__ import annotations
 
+import math
 import time
 from collections import deque
 from typing import Callable, Optional
@@ -56,9 +73,9 @@ class TokenBucket:
     Parameters
     ----------
     capacity:
-        Maximum number of tokens the bucket can hold (``> 0``).
+        Maximum number of tokens the bucket can hold (finite, ``> 0``).
     refill_rate:
-        Tokens added per second (``> 0``).
+        Tokens added per second (finite, ``> 0``).
     clock:
         Callable returning the current time in seconds. Defaults to
         :func:`time.monotonic`.
@@ -81,8 +98,12 @@ class TokenBucket:
     ) -> None:
         if capacity <= 0:
             raise ValueError("capacity must be > 0")
+        if not math.isfinite(capacity):
+            raise ValueError("capacity must be a finite number")
         if refill_rate <= 0:
             raise ValueError("refill_rate must be > 0")
+        if not math.isfinite(refill_rate):
+            raise ValueError("refill_rate must be a finite number")
         self.capacity = float(capacity)
         self.refill_rate = float(refill_rate)
         self._clock = clock or time.monotonic
@@ -102,6 +123,18 @@ class TokenBucket:
         # it is: a later jump back to the same wall time therefore grants no
         # phantom tokens, and the limiter never over-issues.
 
+    @staticmethod
+    def _validate_tokens(tokens: float, capacity: float) -> None:
+        """Reject token requests that are non-finite, non-positive or too large."""
+        if tokens <= 0:
+            raise ValueError("tokens must be > 0")
+        if tokens > capacity:
+            raise ValueError("cannot acquire more tokens than the bucket capacity")
+        if not math.isfinite(tokens):
+            # ``nan`` slips past both comparisons above (every comparison with
+            # nan is False), so it must be caught explicitly.
+            raise ValueError("tokens must be a finite number")
+
     # -- public API --------------------------------------------------------
 
     @property
@@ -116,10 +149,7 @@ class TokenBucket:
         Returns ``True`` and consumes the tokens on success, or ``False`` and
         changes nothing when the bucket is short.
         """
-        if tokens <= 0:
-            raise ValueError("tokens must be > 0")
-        if tokens > self.capacity:
-            raise ValueError("cannot acquire more tokens than the bucket capacity")
+        self._validate_tokens(tokens, self.capacity)
         self._refill()
         if self._tokens >= tokens:
             self._tokens -= tokens
@@ -128,10 +158,7 @@ class TokenBucket:
 
     def time_until_available(self, tokens: float = 1) -> float:
         """Seconds until ``tokens`` could be acquired (``0.0`` if available now)."""
-        if tokens <= 0:
-            raise ValueError("tokens must be > 0")
-        if tokens > self.capacity:
-            raise ValueError("cannot acquire more tokens than the bucket capacity")
+        self._validate_tokens(tokens, self.capacity)
         self._refill()
         deficit = tokens - self._tokens
         if deficit <= 0:
@@ -170,12 +197,15 @@ class SlidingWindowCounter:
     number of admissions within the trailing ``window`` seconds would stay at
     or below ``limit``. A call may request more than one slot with ``tokens``.
 
+    State is one timestamp per admitted request, so memory use is ``O(limit)``
+    regardless of how much time passes.
+
     Parameters
     ----------
     limit:
-        Maximum number of admissions permitted per window (``> 0``).
+        Maximum number of admissions permitted per window (finite, ``> 0``).
     window:
-        Window length in seconds (``> 0``).
+        Window length in seconds (finite, ``> 0``).
     clock:
         Callable returning the current time in seconds. Defaults to
         :func:`time.monotonic`.
@@ -190,8 +220,12 @@ class SlidingWindowCounter:
     ) -> None:
         if limit <= 0:
             raise ValueError("limit must be > 0")
+        if not math.isfinite(limit):
+            raise ValueError("limit must be a finite number")
         if window <= 0:
             raise ValueError("window must be > 0")
+        if not math.isfinite(window):
+            raise ValueError("window must be a finite number")
         self.limit = int(limit)
         self.window = float(window)
         self._clock = clock or time.monotonic
@@ -213,6 +247,9 @@ class SlidingWindowCounter:
             raise ValueError("tokens must be > 0")
         if tokens > self.limit:
             raise ValueError("cannot admit more tokens than the limit")
+        if not math.isfinite(tokens):
+            # ``nan`` slips past both comparisons above, so catch it explicitly.
+            raise ValueError("tokens must be a finite number")
         now = self._clock()
         self._prune(now)
         if len(self._events) + tokens <= self.limit:
