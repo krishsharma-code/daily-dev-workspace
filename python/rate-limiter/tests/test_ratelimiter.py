@@ -201,3 +201,88 @@ class TestSlidingWindowCounter:
         assert limiter.allow()
         clock.now += 10.0
         assert limiter.allow() is True
+
+
+class TestNonFiniteParametersRejected:
+    """``nan`` / ``inf`` must fail fast instead of building a broken limiter."""
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_token_bucket_capacity_rejected(self, clock, bad):
+        with pytest.raises(ValueError):
+            TokenBucket(capacity=bad, refill_rate=1.0, clock=clock)
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_token_bucket_refill_rate_rejected(self, clock, bad):
+        with pytest.raises(ValueError):
+            TokenBucket(capacity=1.0, refill_rate=bad, clock=clock)
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_sliding_window_window_rejected(self, clock, bad):
+        with pytest.raises(ValueError):
+            SlidingWindowCounter(limit=3, window=bad, clock=clock)
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_sliding_window_limit_rejected(self, clock, bad):
+        # Previously ``limit=inf`` leaked an ``OverflowError`` from ``int()``;
+        # it must be a plain ``ValueError`` like every other bad argument.
+        with pytest.raises(ValueError):
+            SlidingWindowCounter(limit=bad, window=1.0, clock=clock)
+
+    def test_nan_capacity_would_have_never_admitted(self, clock):
+        # Regression guard for the reported defect: before the fix this built a
+        # bucket whose ``tokens`` was ``nan`` and which refused every request.
+        with pytest.raises(ValueError):
+            TokenBucket(capacity=float("nan"), refill_rate=1.0, clock=clock)
+
+
+class TestNonFiniteTokensRejected:
+    """A ``nan``/``inf`` token count must raise, not be silently swallowed."""
+
+    def test_try_acquire_nan_rejected(self, clock):
+        bucket = make_bucket(clock)
+        with pytest.raises(ValueError):
+            bucket.try_acquire(float("nan"))
+
+    def test_try_acquire_inf_rejected(self, clock):
+        bucket = make_bucket(clock)
+        with pytest.raises(ValueError):
+            bucket.try_acquire(float("inf"))
+
+    def test_time_until_available_nan_rejected(self, clock):
+        bucket = make_bucket(clock)
+        with pytest.raises(ValueError):
+            bucket.time_until_available(float("nan"))
+
+    def test_acquire_nan_rejected(self, clock):
+        bucket = make_bucket(clock)
+        with pytest.raises(ValueError):
+            bucket.acquire(float("nan"))
+
+    def test_allow_nan_rejected(self, clock):
+        limiter = SlidingWindowCounter(limit=3, window=1.0, clock=clock)
+        with pytest.raises(ValueError):
+            limiter.allow(float("nan"))
+
+    def test_allow_inf_rejected(self, clock):
+        limiter = SlidingWindowCounter(limit=3, window=1.0, clock=clock)
+        with pytest.raises(ValueError):
+            limiter.allow(float("inf"))
+
+
+class TestValidInputStillWorks:
+    """The new guards must not disturb ordinary, finite usage."""
+
+    def test_bucket_still_admits_and_refills(self, clock):
+        bucket = make_bucket(clock, capacity=2, refill_rate=1.0)
+        assert bucket.try_acquire() is True
+        assert bucket.try_acquire() is True
+        assert bucket.try_acquire() is False
+        clock.now += 2.0
+        assert bucket.try_acquire() is True
+
+    def test_counter_still_expires(self, clock):
+        limiter = SlidingWindowCounter(limit=1, window=5.0, clock=clock)
+        assert limiter.allow() is True
+        assert limiter.allow() is False
+        clock.now += 5.0
+        assert limiter.allow() is True
