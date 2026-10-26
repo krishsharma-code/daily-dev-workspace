@@ -37,17 +37,36 @@ not minimal. Where patch size really matters, emit a `move` by hand.
 | `remove` | Deletes the member or element. Removing the document root is an error. |
 | `replace` | Requires the target to exist; `""` replaces the whole document. |
 | `move` | Removes then re-adds, so moves inside one array shift the way the RFC specifies. Moving a node into its own child is rejected. |
-| `copy` | Deep-copies the source value. |
+| `copy` | Deep-copies the source value. `from: ""` copies the whole document, which the RFC allows. |
 | `test` | Compares with JSON-strict equality; a mismatch aborts the patch. |
 
 By default the input is deep-copied first, so a patch that fails half-way
 leaves the caller's data untouched. Pass `in_place=True` to skip that copy and
-mutate the document you handed in.
+mutate the document you handed in — and note that this gives up atomicity:
+operations already applied stay applied when a later one fails.
 
-Invalid input raises `PatchError` (unknown op, missing `value` / `from`,
-nonexistent path, out-of-range index, failed `test`, descending into a scalar)
-or `PointerError` (a `path` / `from` that isn't a valid pointer). Both name the
-offending operation by position, e.g. `operation 1: no such member 'b'`.
+Invalid input raises `PatchError` (unknown op, non-string `op` / `path` /
+`from`, missing `value` / `from`, nonexistent path, out-of-range index, failed
+`test`, descending into a scalar) or `PointerError` (a `path` / `from` that
+isn't a valid pointer). Both name the offending operation by position, e.g.
+`operation 1: no such member 'b'`.
+
+## Receiving untrusted patches
+
+A patch is usually produced by someone else, so `apply` validates before it
+walks. Three checks exist because the obvious versions of them leak:
+
+| Input | Naive behaviour | Here |
+| --- | --- | --- |
+| `op` that is a dict | `TypeError: unhashable type` out of a set-membership test | `PatchError: 'op' must be a string` |
+| `path` / `from` that is a list or `None` | `TypeError` out of `parse_pointer` | `PatchError: 'path' must be a string` |
+| Array index `"٣"` (Arabic-Indic 3) or `"²"` | `str.isdigit()` accepts both: the first silently addresses index 3, the second raises `ValueError` from `int()` | `PatchError: invalid array index` |
+
+Array indices are therefore checked against the RFC 6901 grammar (ASCII `0` or
+`[1-9][0-9]*`) rather than `str.isdigit()`. Nothing here guards against a
+patch that is simply *large* or deeply nested: the copy and the recursive walk
+are proportional to the document, so cap patch size at the boundary where you
+accept it (an HTTP body limit, a queue message limit) rather than in here.
 
 ## Equality is JSON-strict
 
@@ -86,9 +105,10 @@ cd python/json-diff
 python -m pytest
 ```
 
-48 tests: pointer escaping, every operation (including the failure modes),
-immutability, and a seeded randomised round-trip that checks
-`apply(a, diff(a, b)) == b` across 300 generated document pairs. No third-party
+57 tests: pointer escaping, every operation (including the failure modes),
+immutability, malformed-patch hardening (non-string `op` / `path` / `from`,
+non-ASCII indices, non-sequence patches), and a seeded randomised round-trip
+that checks `apply(a, diff(a, b)) == b` across 300 generated document pairs. No third-party
 dependency at runtime; `pytest` is needed only to run the suite.
 
 ## Example
@@ -104,6 +124,10 @@ patch = diff(before, after)
 #  {'op': 'replace', 'path': '/env/LOG_LEVEL', 'value': 'debug'}]
 
 apply(before, patch) == after   # True
+
+# A patch from an untrusted peer is validated, never trusted:
+apply({"a": 1}, [{"op": {"op": "add"}, "path": "/b", "value": 2}])
+# PatchError: operation 0: 'op' must be a string, not dict
 
 # Patches from elsewhere work too:
 apply({"a": [1, 2, 3]}, [

@@ -65,6 +65,13 @@ def main():
         print(f"rejected as expected: {error}")
     print(f"BEFORE still has replicas={BEFORE['replicas']}")
 
+    # A malformed patch from a peer is rejected as a PatchError. Without the
+    # type checks this would escape as TypeError: unhashable type: 'dict'.
+    try:
+        apply(BEFORE, [{"op": {"op": "add"}, "path": "/x", "value": 1}])
+    except PatchError as error:
+        print(f"malformed patch rejected: {error}")
+
 
 if __name__ == "__main__":
     main()
