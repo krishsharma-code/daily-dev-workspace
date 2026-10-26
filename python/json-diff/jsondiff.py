@@ -13,6 +13,13 @@ Paths follow RFC 6901 JSON Pointer, with ``~0`` / ``~1`` escaping handled for
 you. Nothing here touches the network or the filesystem, and neither function
 mutates its arguments unless you explicitly ask it to.
 
+Patches are frequently received from someone else -- a peer syncing a
+document, a client sending a change set -- so :func:`apply` treats every
+operation as untrusted input: the operation name, ``path`` and ``from`` are
+type-checked before use, array indices must be ASCII digits, and every
+malformed patch raises :class:`PatchError` (or :class:`PointerError`) rather
+than leaking a ``TypeError`` / ``ValueError`` from deep inside the walk.
+
     >>> diff({"a": 1}, {"a": 2})
     [{'op': 'replace', 'path': '/a', 'value': 2}]
     >>> apply({"a": 1}, [{"op": "add", "path": "/b", "value": 2}])
@@ -22,7 +29,8 @@ mutates its arguments unless you explicitly ask it to.
 from __future__ import annotations
 
 import copy
-from typing import Any, Iterable, Sequence
+from collections.abc import Sequence
+from typing import Any, Iterable
 
 __all__ = [
     "PatchError",
@@ -207,6 +215,12 @@ def apply(document: Any, patch: Sequence[dict[str, Any]], *, in_place: bool = Fa
     Raises :class:`PatchError` when an operation is malformed, targets a path
     that does not exist, or a ``test`` operation fails; :class:`PointerError`
     when a ``path`` / ``from`` string is not a valid JSON Pointer.
+
+    Failures are all-or-nothing only when ``in_place`` is false: the copy is
+    thrown away, so the caller's document is untouched. With ``in_place=True``
+    operations already applied stay applied when a later one fails -- wrap the
+    call in ``try`` / ``except`` and discard the document, or use the default
+    copying mode, if you need atomicity.
     """
     if isinstance(patch, (str, bytes)) or not isinstance(patch, Sequence):
         raise PatchError("patch must be a sequence of operation objects")
@@ -221,15 +235,29 @@ def apply(document: Any, patch: Sequence[dict[str, Any]], *, in_place: bool = Fa
 
 
 def _apply_one(document: Any, operation: Any) -> Any:
+    """Apply a single patch operation to ``document`` and return the result.
+
+    ``document`` is mutated in place where it can be (object members, array
+    elements) and returned otherwise, so the caller always uses the return
+    value. Every field is validated here before it reaches the pointer walk,
+    which is why a hostile patch cannot turn into an unhandled ``TypeError``.
+    """
     if not isinstance(operation, dict):
         raise PatchError(f"operation must be an object, not {type(operation).__name__}")
 
     name = operation.get("op")
+    # Check the type before the membership test: a non-hashable ``op`` such as
+    # a dict would otherwise raise ``TypeError: unhashable type`` instead of a
+    # PatchError, and an int/None would be reported as merely unsupported.
+    if not isinstance(name, str):
+        raise PatchError(f"'op' must be a string, not {type(name).__name__}")
     if name not in OPERATIONS:
         raise PatchError(f"unsupported op {name!r}")
     if "path" not in operation:
         raise PatchError(f"op {name!r} is missing 'path'")
     path = operation["path"]
+    if not isinstance(path, str):
+        raise PatchError(f"'path' must be a string, not {type(path).__name__}")
     tokens = parse_pointer(path)
 
     if name == "test":
@@ -280,14 +308,16 @@ def _apply_one(document: Any, operation: Any) -> Any:
         return document
 
     if name == "copy":
-        source_tokens = _require_from(operation, name)
+        # RFC 6902 allows copying the whole document (``from`` is the empty
+        # pointer); only ``move`` forbids a root source.
+        source_tokens = _require_from(operation, name, allow_root=True)
         value = copy.deepcopy(_resolve(document, source_tokens))
         return _apply_one(document, {"op": "add", "path": path, "value": value})
 
     # name == "move"
+    # ``_require_from`` already rejects a root source (you cannot remove the
+    # document root, so you cannot move it either).
     source_tokens = _require_from(operation, name)
-    if not source_tokens:
-        raise PatchError("cannot move the document root")
     if tokens[: len(source_tokens)] == source_tokens and len(tokens) > len(source_tokens):
         raise PatchError(f"cannot move {operation['from']!r} into its own child {path!r}")
     value = copy.deepcopy(_resolve(document, source_tokens))
@@ -296,16 +326,27 @@ def _apply_one(document: Any, operation: Any) -> Any:
 
 
 def _require_value(operation: dict[str, Any], name: str) -> Any:
+    """Return the ``value`` member every write operation must carry."""
     if "value" not in operation:
         raise PatchError(f"op {name!r} is missing 'value'")
     return operation["value"]
 
 
-def _require_from(operation: dict[str, Any], name: str) -> list[str]:
+def _require_from(operation: dict[str, Any], name: str, *, allow_root: bool = False) -> list[str]:
+    """Return the parsed ``from`` pointer of a ``move`` / ``copy`` operation.
+
+    ``allow_root`` is set for ``copy``, where the empty pointer means "the
+    whole document"; ``move`` keeps it false because the root cannot be
+    removed. A non-string ``from`` is reported as a malformed operation rather
+    than surfacing the ``TypeError`` from :func:`parse_pointer`.
+    """
     if "from" not in operation:
         raise PatchError(f"op {name!r} is missing 'from'")
-    tokens = parse_pointer(operation["from"])
-    if not tokens:
+    source = operation["from"]
+    if not isinstance(source, str):
+        raise PatchError(f"'from' must be a string, not {type(source).__name__}")
+    tokens = parse_pointer(source)
+    if not tokens and not allow_root:
         raise PatchError(f"op {name!r} needs a non-root 'from'")
     return tokens
 
@@ -315,10 +356,18 @@ def _index(container: list[Any], token: str, *, lenient: bool) -> int:
 
     ``lenient`` allows an index equal to the array length, which ``add``
     permits (it appends); every other operation needs an existing element.
+
+    RFC 6901 array indices are ASCII ``0`` or ``[1-9][0-9]*``, so the check is
+    deliberately stricter than :meth:`str.isdigit`: that accepts other Unicode
+    digit families (``"\u0663"`` is 3, so ``/a/\u0663`` would quietly address
+    index 3) and superscripts (``"\u00b2"`` passes ``isdigit`` but makes
+    ``int()`` raise ``ValueError``). Neither should reach the caller.
     """
     if token == "-":
         raise PatchError("'-' is only valid as the final token of an 'add' path")
-    if not (token == "0" or (token.isdigit() and not token.startswith("0"))):
+    if not token.isascii() or not token.isdigit():
+        raise PatchError(f"invalid array index {token!r}")
+    if len(token) > 1 and token.startswith("0"):
         raise PatchError(f"invalid array index {token!r}")
     index = int(token)
     limit = len(container) if lenient else len(container) - 1
