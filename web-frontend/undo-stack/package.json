@@ -1,0 +1,11 @@
+{
+  "name": "undo-stack",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free undo/redo history manager with keystroke coalescing and transactions, for the browser and Node.",
+  "main": "undo-stack.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}
