@@ -4,7 +4,9 @@ Standalone front-end work: HTML, CSS, and modern JavaScript components and utili
 
 ## Modules
 
-_No modules yet. Each new module gets its own subfolder here._
+- [`color-kit/`](color-kit/) — dependency-free colour parsing, conversion, blending and WCAG contrast utilities.
+- [`fuzzy-matcher/`](fuzzy-matcher/) — fuzzy subsequence matching and ranking for typeahead search.
+- [`undo-stack/`](undo-stack/) — undo/redo history manager with keystroke coalescing and transactions.
 
 ## Conventions
 

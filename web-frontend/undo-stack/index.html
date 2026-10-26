@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>undo-stack — undo/redo for a note editor</title>
+    <link rel="stylesheet" href="undo-stack.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1>undo-stack</h1>
+        <p>
+          A tiny undo/redo history manager. This demo keeps a note and its tags in one
+          snapshot object: typing coalesces into a single step, tag changes get their own
+          step, and <em>Format</em> batches two edits into one step with a transaction.
+        </p>
+      </header>
+
+      <div class="layout">
+        <section class="panel" aria-labelledby="editor-heading">
+          <h2 id="editor-heading">Note</h2>
+          <textarea id="note" aria-label="Note text" spellcheck="true"></textarea>
+
+          <div class="row">
+            <input id="tag-input" type="text" placeholder="Add a tag…" aria-label="New tag" />
+            <button id="add-tag" class="primary" type="button">Add tag</button>
+            <button id="format" type="button" title="Trim trailing spaces and dedupe tags in one undo step">
+              Format
+            </button>
+          </div>
+
+          <div id="tags" class="tags" aria-live="polite"></div>
+
+          <div class="row">
+            <button id="undo" type="button">
+              Undo <kbd>Ctrl</kbd>+<kbd>Z</kbd>
+            </button>
+            <button id="redo" type="button">
+              Redo <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>
+            </button>
+            <button id="reset" type="button">Reset</button>
+          </div>
+
+          <p class="status" id="status"></p>
+        </section>
+
+        <section class="panel" aria-labelledby="history-heading">
+          <h2 id="history-heading">History</h2>
+          <ol class="steps" id="steps"></ol>
+          <p class="legend">
+            Each row is one snapshot in the stack. Rows below the highlighted one are the
+            redo branch.
+          </p>
+        </section>
+      </div>
+    </div>
+
+    <script type="module">
+      import { createUndoStack } from "./undo-stack.js";
+
+      const SAMPLE = {
+        text: "Ship the undo-stack demo.\nWrite the tests before committing.",
+        tags: ["demo", "history"],
+      };
+
+      const history = createUndoStack({
+        initial: SAMPLE,
+        limit: 50,
+        coalesceMs: 600,
+      });
+
+      const noteEl = document.getElementById("note");
+      const tagsEl = document.getElementById("tags");
+      const tagInput = document.getElementById("tag-input");
+      const undoBtn = document.getElementById("undo");
+      const redoBtn = document.getElementById("redo");
+      const statusEl = document.getElementById("status");
+      const stepsEl = document.getElementById("steps");
+
+      let state = history.current;
+
+      /** Replace the live state and record it; `key` enables coalescing. */
+      function commit(next, key) {
+        state = next;
+        history.push(next, key === undefined ? {} : { coalesceKey: key });
+      }
+
+      function previewOf(snapshot) {
+        const text = String(snapshot?.text ?? "").replace(/\s+/g, " ").trim();
+        const tags = snapshot?.tags?.length ? ` · ${snapshot.tags.length} tag(s)` : "";
+        return (text || "(empty)") + tags;
+      }
+
+      function render() {
+        state = history.current;
+
+        if (noteEl.value !== state.text) noteEl.value = state.text;
+
+        tagsEl.replaceChildren();
+        if (state.tags.length === 0) {
+          const empty = document.createElement("span");
+          empty.className = "empty";
+          empty.textContent = "No tags yet.";
+          tagsEl.append(empty);
+        } else {
+          state.tags.forEach((tag, i) => {
+            const chip = document.createElement("span");
+            chip.className = "tag";
+            chip.append(document.createTextNode(tag));
+
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.textContent = "×";
+            remove.setAttribute("aria-label", `Remove tag ${tag}`);
+            remove.addEventListener("click", () => {
+              commit({ ...state, tags: state.tags.filter((_, j) => j !== i) });
+            });
+            chip.append(remove);
+            tagsEl.append(chip);
+          });
+        }
+
+        undoBtn.disabled = !history.canUndo;
+        redoBtn.disabled = !history.canRedo;
+
+        const steps = history.length - 1;
+        statusEl.innerHTML =
+          `Step <strong>${history.undoDepth}</strong> of <strong>${steps}</strong>` +
+          ` · ${history.canUndo ? "" : "nothing to undo · "}` +
+          `${history.redoDepth} step(s) to redo`;
+
+        const snapshots = history.states();
+        stepsEl.replaceChildren();
+        snapshots.forEach((snapshot, i) => {
+          const li = document.createElement("li");
+          if (i === history.undoDepth) li.className = "current";
+          else if (i > history.undoDepth) li.className = "undone";
+
+          const idx = document.createElement("span");
+          idx.className = "idx";
+          idx.textContent = String(i);
+
+          const preview = document.createElement("span");
+          preview.className = "preview";
+          preview.textContent = previewOf(snapshot);
+
+          li.append(idx, preview);
+          stepsEl.append(li);
+        });
+      }
+
+      history.subscribe(render);
+
+      // Typing coalesces: a burst of keystrokes collapses into one undo step.
+      noteEl.addEventListener("input", () => {
+        commit({ ...state, text: noteEl.value }, "typing");
+      });
+
+      function addTag() {
+        const tag = tagInput.value.trim();
+        if (!tag) return;
+        if (!state.tags.includes(tag)) {
+          commit({ ...state, tags: [...state.tags, tag] });
+        }
+        tagInput.value = "";
+        tagInput.focus();
+      }
+
+      document.getElementById("add-tag").addEventListener("click", addTag);
+      tagInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          addTag();
+        }
+      });
+
+      // One button, two edits, one undo step.
+      document.getElementById("format").addEventListener("click", () => {
+        history.transaction((h) => {
+          const trimmed = state.text.replace(/[ \t]+$/gm, "").trim();
+          h.push({ text: trimmed, tags: state.tags });
+          const deduped = [...new Set(state.tags.map((t) => t.trim()).filter(Boolean))];
+          h.push({ text: trimmed, tags: deduped });
+        });
+      });
+
+      undoBtn.addEventListener("click", () => history.undo());
+      redoBtn.addEventListener("click", () => history.redo());
+      document.getElementById("reset").addEventListener("click", () => {
+        history.reset({ text: "", tags: [] });
+      });
+
+      document.addEventListener("keydown", (event) => {
+        const mod = event.ctrlKey || event.metaKey;
+        if (!mod) return;
+
+        const key = event.key.toLowerCase();
+        if (key === "z" && !event.shiftKey) {
+          event.preventDefault();
+          history.undo();
+        } else if ((key === "z" && event.shiftKey) || key === "y") {
+          event.preventDefault();
+          history.redo();
+        }
+      });
+
+      render();
+    </script>
+  </body>
+</html>
