@@ -365,3 +365,91 @@ def _same(left, right):
     if isinstance(left, list):
         return len(left) == len(right) and all(_same(a, b) for a, b in zip(left, right))
     return left == right
+
+
+# --------------------------------------------------------------------------
+# Hardening -- malformed patches are untrusted input
+#
+# A patch usually arrives from another process or another machine, so every
+# field is validated and anything malformed must surface as PatchError (or
+# PointerError). Leaking a TypeError / ValueError from inside the walk gives
+# the caller an exception it cannot reasonably catch and turns a bad patch
+# into a crash instead of a rejection.
+# --------------------------------------------------------------------------
+
+
+def test_apply_rejects_non_string_op():
+    # A dict is unhashable, so an unguarded ``name in OPERATIONS`` would raise
+    # TypeError instead of PatchError.
+    with pytest.raises(PatchError, match="'op' must be a string"):
+        apply({"a": 1}, [{"op": {"op": "add"}, "path": "/b", "value": 2}])
+    with pytest.raises(PatchError, match="'op' must be a string"):
+        apply({"a": 1}, [{"path": "/b", "value": 2}])
+    with pytest.raises(PatchError, match="'op' must be a string"):
+        apply({"a": 1}, [{"op": 1, "path": "/b", "value": 2}])
+
+
+def test_apply_rejects_non_string_path():
+    with pytest.raises(PatchError, match="'path' must be a string"):
+        apply({"a": 1}, [{"op": "add", "path": ["a"], "value": 2}])
+    with pytest.raises(PatchError, match="'path' must be a string"):
+        apply({"a": 1}, [{"op": "add", "path": None, "value": 2}])
+
+
+def test_apply_rejects_non_string_from():
+    with pytest.raises(PatchError, match="'from' must be a string"):
+        apply({"a": 1}, [{"op": "move", "from": 0, "path": "/b"}])
+    with pytest.raises(PatchError, match="'from' must be a string"):
+        apply({"a": 1}, [{"op": "copy", "from": {"x": 1}, "path": "/b"}])
+
+
+def test_apply_rejects_non_ascii_array_index():
+    # '٣' (Arabic-Indic three) passes str.isdigit() and int() reads it as 3,
+    # so an unguarded check would quietly insert at index 3.
+    with pytest.raises(PatchError, match="invalid array index"):
+        apply({"a": [1, 2, 3]}, [{"op": "add", "path": "/a/\u0663", "value": 9}])
+    # '²' passes str.isdigit() but int() raises ValueError.
+    with pytest.raises(PatchError, match="invalid array index"):
+        apply({"a": [1, 2, 3]}, [{"op": "add", "path": "/a/\u00b2", "value": 9}])
+    # An empty token is not a valid index either.
+    with pytest.raises(PatchError, match="invalid array index"):
+        apply({"a": [1, 2, 3]}, [{"op": "add", "path": "/a/", "value": 9}])
+
+
+def test_apply_copy_from_root_copies_the_whole_document():
+    # RFC 6902 allows "" as the 'from' of a copy: the source is the document.
+    document = {"a": {"n": 1}}
+    result = apply(document, [{"op": "copy", "from": "", "path": "/backup"}])
+    assert result == {"a": {"n": 1}, "backup": {"a": {"n": 1}}}
+    result["backup"]["a"]["n"] = 2
+    assert result["a"]["n"] == 1  # still a deep copy
+
+
+def test_apply_move_from_root_is_rejected():
+    # The root cannot be removed, so it cannot be moved.
+    with pytest.raises(PatchError, match="non-root 'from'"):
+        apply({"a": 1}, [{"op": "move", "from": "", "path": "/b"}])
+
+
+def test_apply_rejects_non_object_operation():
+    with pytest.raises(PatchError, match="operation must be an object"):
+        apply({"a": 1}, ["add /b 2"])
+
+
+def test_apply_rejects_non_sequence_patch():
+    for patch in ("not-a-patch", b"bytes", {"op": "add"}, 7):
+        with pytest.raises(PatchError, match="sequence of operation objects"):
+            apply({"a": 1}, patch)
+
+
+def test_in_place_failure_keeps_earlier_operations():
+    # Documented behaviour: in_place skips the protective copy, so a failure
+    # part-way leaves the earlier operations applied.
+    document = {"a": 1}
+    with pytest.raises(PatchError):
+        apply(
+            document,
+            [{"op": "add", "path": "/b", "value": 2}, {"op": "remove", "path": "/nope"}],
+            in_place=True,
+        )
+    assert document == {"a": 1, "b": 2}
