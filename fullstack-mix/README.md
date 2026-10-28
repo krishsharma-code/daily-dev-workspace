@@ -6,6 +6,11 @@ Mixed projects that combine a front end and a back end. Each project is split in
 
 - [`link-vault/`](link-vault/) — a self-hosted bookmark manager: a stdlib Python
   server (SQLite + REST API) with a vanilla HTML/CSS/JS client.
+- [`flashcards/`](flashcards/) — a flashcard app with a spaced-repetition
+  scheduler: a stdlib Python server with a vanilla HTML/CSS/JS client.
+- [`webhook-inbox/`](webhook-inbox/) — capture, inspect and replay webhook
+  deliveries locally: a stdlib Python server (SQLite + REST API) with a vanilla
+  HTML/CSS/JS inspector.
 
 ## Conventions
 
