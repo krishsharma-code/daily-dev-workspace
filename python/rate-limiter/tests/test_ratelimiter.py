@@ -286,3 +286,174 @@ class TestValidInputStillWorks:
         assert limiter.allow() is False
         clock.now += 5.0
         assert limiter.allow() is True
+
+
+class TestWholeNumberCounts:
+    """``limit`` and integer ``tokens`` must be whole numbers, not truncated."""
+
+    def test_fractional_limit_rejected(self, clock):
+        # Previously ``int(2.9)`` silently produced a limit of 2 -- a budget
+        # halved with no error at all.
+        with pytest.raises(ValueError, match="whole number"):
+            SlidingWindowCounter(limit=2.9, window=1.0, clock=clock)
+
+    def test_integral_float_limit_accepted(self, clock):
+        limiter = SlidingWindowCounter(limit=3.0, window=1.0, clock=clock)
+        assert limiter.limit == 3
+        assert isinstance(limiter.limit, int)
+
+    def test_fractional_allow_tokens_rejected(self, clock):
+        # Previously this escaped as ``TypeError: 'float' object cannot be
+        # interpreted as an integer`` from ``range()`` inside ``allow``.
+        limiter = SlidingWindowCounter(limit=3, window=1.0, clock=clock)
+        with pytest.raises(ValueError, match="whole number"):
+            limiter.allow(1.5)
+
+    def test_fractional_tokens_does_not_mutate_state(self, clock):
+        limiter = SlidingWindowCounter(limit=3, window=1.0, clock=clock)
+        with pytest.raises(ValueError):
+            limiter.allow(1.5)
+        assert limiter.remaining() == 3
+
+    def test_integral_float_tokens_accepted(self, clock):
+        limiter = SlidingWindowCounter(limit=3, window=1.0, clock=clock)
+        assert limiter.allow(2.0) is True
+        assert limiter.remaining() == 1
+
+    def test_fractional_retry_after_tokens_rejected(self, clock):
+        limiter = SlidingWindowCounter(limit=3, window=1.0, clock=clock)
+        with pytest.raises(ValueError, match="whole number"):
+            limiter.retry_after(0.5)
+
+
+class TestTextInputRejected:
+    """Text is refused, not coerced, so config mistakes surface immediately."""
+
+    @pytest.mark.parametrize("bad", ["3", b"3"])
+    def test_bucket_capacity_text_rejected(self, clock, bad):
+        with pytest.raises(ValueError, match="must be a number"):
+            TokenBucket(capacity=bad, refill_rate=1.0, clock=clock)
+
+    def test_counter_limit_text_rejected(self, clock):
+        with pytest.raises(ValueError, match="must be a number"):
+            SlidingWindowCounter(limit="3", window=1.0, clock=clock)
+
+    def test_try_acquire_text_rejected(self, clock):
+        bucket = make_bucket(clock)
+        with pytest.raises(ValueError, match="must be a number"):
+            bucket.try_acquire("1")
+
+    def test_allow_text_rejected(self, clock):
+        limiter = SlidingWindowCounter(limit=3, window=1.0, clock=clock)
+        with pytest.raises(ValueError, match="must be a number"):
+            limiter.allow("1")
+
+    def test_none_tokens_rejected_as_value_error(self, clock):
+        # ``None > 0`` used to raise TypeError; the documented contract is
+        # ValueError for every invalid argument.
+        bucket = make_bucket(clock)
+        with pytest.raises(ValueError):
+            bucket.try_acquire(None)
+
+
+class TestErrorMessagesAreAccurate:
+    """The message must name the real problem, not a downstream symptom."""
+
+    def test_inf_tokens_reports_non_finite(self, clock):
+        bucket = make_bucket(clock)
+        with pytest.raises(ValueError, match="finite"):
+            bucket.try_acquire(float("inf"))
+
+    def test_acquire_inf_tokens_reports_non_finite(self, clock):
+        bucket = make_bucket(clock)
+        with pytest.raises(ValueError, match="finite"):
+            bucket.acquire(float("inf"))
+
+    def test_oversized_tokens_reports_capacity(self, clock):
+        bucket = make_bucket(clock, capacity=5)
+        with pytest.raises(ValueError, match="bucket capacity"):
+            bucket.try_acquire(6)
+
+    def test_oversized_allow_reports_limit(self, clock):
+        limiter = SlidingWindowCounter(limit=3, window=1.0, clock=clock)
+        with pytest.raises(ValueError, match="than the limit"):
+            limiter.allow(4)
+
+
+class TestTimeoutValidation:
+    """A ``nan`` timeout used to defeat the deadline and block forever."""
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_timeout_rejected(self, clock, bad):
+        bucket = make_bucket(clock)
+        with pytest.raises(ValueError, match="timeout"):
+            bucket.acquire(timeout=bad)
+
+    def test_zero_timeout_allowed_when_tokens_available(self, clock):
+        bucket = make_bucket(clock)
+        assert bucket.acquire(timeout=0) == 0.0
+
+    def test_zero_timeout_raises_when_empty(self, clock):
+        bucket = make_bucket(clock, capacity=1, refill_rate=1.0)
+        bucket.try_acquire(1)
+        with pytest.raises(RateLimitExceeded):
+            bucket.acquire(timeout=0)
+
+    def test_text_timeout_rejected(self, clock):
+        bucket = make_bucket(clock)
+        with pytest.raises(ValueError, match="timeout"):
+            bucket.acquire(timeout="1")
+
+    def test_bad_timeout_does_not_consume_tokens(self, clock):
+        bucket = make_bucket(clock, capacity=2)
+        with pytest.raises(ValueError):
+            bucket.acquire(timeout=float("nan"))
+        assert bucket.tokens == 2
+
+
+class TestRetryAfter:
+    def test_zero_when_window_has_room(self, clock):
+        limiter = SlidingWindowCounter(limit=2, window=10.0, clock=clock)
+        assert limiter.retry_after() == 0.0
+
+    def test_full_window_reports_oldest_expiry(self, clock):
+        limiter = SlidingWindowCounter(limit=2, window=10.0, clock=clock)
+        limiter.allow(2)
+        clock.now += 4.0
+        assert limiter.retry_after() == pytest.approx(6.0)
+
+    def test_burst_needs_more_slots_than_one_expiry(self, clock):
+        limiter = SlidingWindowCounter(limit=2, window=10.0, clock=clock)
+        limiter.allow(1)  # t=0
+        clock.now += 5.0
+        limiter.allow(1)  # t=5
+        clock.now += 1.0  # t=6
+        # One slot frees at t=10, a second at t=15.
+        assert limiter.retry_after(1) == pytest.approx(4.0)
+        assert limiter.retry_after(2) == pytest.approx(9.0)
+
+    def test_waiting_for_retry_after_actually_admits(self, clock):
+        limiter = SlidingWindowCounter(limit=2, window=10.0, clock=clock)
+        limiter.allow(2)
+        clock.now += 3.0
+        wait = limiter.retry_after(2)
+        assert wait == pytest.approx(7.0)
+        clock.now += wait
+        assert limiter.allow(2) is True
+
+    def test_partial_wait_does_not_admit(self, clock):
+        limiter = SlidingWindowCounter(limit=2, window=10.0, clock=clock)
+        limiter.allow(2)
+        clock.now += limiter.retry_after(2) - 0.001
+        assert limiter.allow(2) is False
+
+    def test_more_tokens_than_limit_rejected(self, clock):
+        limiter = SlidingWindowCounter(limit=2, window=10.0, clock=clock)
+        with pytest.raises(ValueError, match="than the limit"):
+            limiter.retry_after(3)
+
+    def test_does_not_record_an_admission(self, clock):
+        limiter = SlidingWindowCounter(limit=2, window=10.0, clock=clock)
+        limiter.allow(1)
+        limiter.retry_after(1)
+        assert limiter.remaining() == 1

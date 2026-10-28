@@ -49,6 +49,7 @@ def sliding_window_demo() -> None:
     print("\n-- sliding window (limit=3 per 10s) --")
     print("three quick requests:", [limiter.allow() for _ in range(3)])
     print("fourth request:", limiter.allow(), f"(remaining={limiter.remaining()})")
+    print(f"retry_after() says a slot frees in {limiter.retry_after():.2f}s")
     clock.now += 6
     print("after 6s, still limited:", limiter.allow())
     clock.now += 5  # 11s since the first three admissions
