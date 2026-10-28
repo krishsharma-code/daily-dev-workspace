@@ -30,8 +30,18 @@ deterministic and no test ever sleeps in real time.
 | Member | Purpose |
 | --- | --- |
 | `allow(tokens=1)` | Admit `tokens` requests if the window has room; records the admission only on success. |
+| `retry_after(tokens=1)` | Seconds until `tokens` admissions would fit (`0.0` if there is room now) — populate a `Retry-After` header with this. |
 | `remaining()` | Admissions still available in the current window. |
 | `reset()` | Forget all recorded admissions. |
+
+The window is **half-open**, `(now - window, now]`: an admission exactly
+`window` seconds old has expired and frees its slot. `retry_after()` returns
+the exact instant at which that happens, so `sleep(retry_after(n))` followed by
+`allow(n)` always succeeds.
+
+Pruning is amortised `O(1)` per admission — each timestamp is appended once and
+popped once — but a single `allow()` call may pop up to `limit` expired entries,
+so one call costs `O(limit)` in the worst case.
 
 ## Validation
 
@@ -40,7 +50,19 @@ Invalid arguments raise `ValueError`:
 - non-positive or non-finite values (`capacity <= 0`, `window <= 0`,
   `nan`, `inf`, ...);
 - `tokens` above the `capacity` / `limit`, or non-finite / non-positive;
-- a negative `timeout`.
+- a `limit` or `tokens` that is not a **whole number** — `limit=2.9` is
+  rejected rather than silently truncated to 2, and `allow(1.5)` raises instead
+  of blowing up inside the counter;
+- text values such as `"100"`, which are refused rather than coerced: parse
+  environment variables and config yourself, where the failure is obvious;
+- a `timeout` that is negative or non-finite (`inf` is not a stand-in for
+  `None`). A `nan` timeout is the dangerous one — every comparison against it is
+  false, so a naive `timeout < 0` check lets it through and the call blocks
+  forever instead of timing out.
+
+Every rejection is a `ValueError`, never a `TypeError` escaping from an
+internal comparison, so untrusted configuration can be validated with a single
+`except ValueError`.
 
 Non-finite parameters are rejected deliberately rather than tolerated: a
 `nan` capacity yields a bucket that silently never admits, and an `inf` window
@@ -100,6 +122,16 @@ if not bucket.try_acquire():
 limiter = SlidingWindowCounter(limit=3, window=10.0)
 if limiter.allow():
     ...  # handle the request
+```
+
+If you are serving HTTP, turn a refusal into a `Retry-After` header instead of
+inventing the window arithmetic yourself:
+
+```python
+limiter = SlidingWindowCounter(limit=60, window=60.0)
+if not limiter.allow():
+    headers["Retry-After"] = str(math.ceil(limiter.retry_after()))
+    return 429, headers
 ```
 
 To test without real time passing, pass a fake clock:
