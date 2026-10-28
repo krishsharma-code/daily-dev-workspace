@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Webhook Inbox</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Webhook Inbox</h1>
+      <div class="topbar-actions">
+        <span id="status" class="status" data-state="unknown">connecting…</span>
+        <label class="auto-refresh">
+          <input type="checkbox" id="auto-refresh" checked />
+          auto-refresh
+        </label>
+        <button id="refresh" class="button" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel bins" aria-labelledby="bins-heading">
+        <h2 id="bins-heading">Bins</h2>
+        <ul id="bin-list" class="bin-list"></ul>
+        <form id="bin-form" class="stack">
+          <label for="bin-name">New bin</label>
+          <div class="row">
+            <input
+              id="bin-name"
+              name="name"
+              placeholder="stripe-test"
+              autocomplete="off"
+              required
+            />
+            <button class="button" type="submit">Add</button>
+          </div>
+          <p class="hint" id="bin-hint">
+            Point a sender at <code id="capture-url">/in/&lt;bin&gt;</code>
+          </p>
+        </form>
+      </section>
+
+      <section class="panel events" aria-labelledby="events-heading">
+        <div class="panel-head">
+          <h2 id="events-heading">Events</h2>
+          <span id="event-count" class="badge">0</span>
+        </div>
+        <ul id="event-list" class="event-list"></ul>
+        <p class="empty" id="event-empty">No events captured yet.</p>
+      </section>
+
+      <section class="panel detail" aria-labelledby="detail-heading">
+        <div class="panel-head">
+          <h2 id="detail-heading">Request</h2>
+          <button id="delete-event" class="button danger" type="button" hidden>
+            Delete
+          </button>
+        </div>
+        <div id="detail-body" class="detail-body">
+          <p class="empty">Select an event to inspect it.</p>
+        </div>
+      </section>
+    </main>
+
+    <template id="bin-template">
+      <li class="bin">
+        <button class="bin-select" type="button">
+          <span class="bin-name"></span>
+          <span class="bin-count"></span>
+        </button>
+        <button class="bin-clear" type="button" title="Clear events">✕</button>
+      </li>
+    </template>
+
+    <template id="event-template">
+      <li class="event">
+        <button class="event-select" type="button">
+          <span class="event-method"></span>
+          <span class="event-path"></span>
+          <span class="event-time"></span>
+        </button>
+      </li>
+    </template>
+
+    <script src="app.js"></script>
+  </body>
+</html>
