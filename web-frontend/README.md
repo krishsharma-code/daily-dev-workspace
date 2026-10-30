@@ -6,6 +6,7 @@ Standalone front-end work: HTML, CSS, and modern JavaScript components and utili
 
 - [`color-kit/`](color-kit/) — dependency-free colour parsing, conversion, blending and WCAG contrast utilities.
 - [`fuzzy-matcher/`](fuzzy-matcher/) — fuzzy subsequence matching and ranking for typeahead search.
+- [`keyboard-shortcuts/`](keyboard-shortcuts/) — shortcut registry with chord/sequence matching, scopes and platform-aware labels.
 - [`undo-stack/`](undo-stack/) — undo/redo history manager with keystroke coalescing and transactions.
 
 ## Conventions

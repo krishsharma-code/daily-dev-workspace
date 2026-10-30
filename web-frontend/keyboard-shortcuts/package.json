@@ -1,0 +1,11 @@
+{
+  "name": "keyboard-shortcuts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free shortcut registry: chords, sequences, scopes and platform-aware display labels.",
+  "main": "keyboard-shortcuts.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}

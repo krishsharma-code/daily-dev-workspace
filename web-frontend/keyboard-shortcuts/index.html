@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>keyboard-shortcuts — demo</title>
+    <link rel="stylesheet" href="keyboard-shortcuts.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="head">
+        <div>
+          <h1>keyboard-shortcuts</h1>
+          <p class="sub">
+            A dependency-free shortcut registry. Press a binding below and watch the
+            registry decide whether it fired.
+          </p>
+        </div>
+        <span class="platform" id="platform">platform: …</span>
+      </header>
+
+      <section class="grid">
+        <div class="card">
+          <h2>Try it</h2>
+
+          <label class="field">
+            <span>Search</span>
+            <input
+              id="search"
+              type="text"
+              placeholder="Press Mod+K to focus me"
+              autocomplete="off"
+            />
+          </label>
+          <p class="hint">
+            While this field has focus, single-key shortcuts are suppressed — the
+            <code>when</code> predicate checks <code>isEditableTarget</code>.
+          </p>
+
+          <div class="row">
+            <button id="scope-toggle" type="button">Enable “list” scope</button>
+            <button id="help-toggle" type="button">Help (?)</button>
+            <button id="reset" type="button">Reset log</button>
+          </div>
+
+          <div class="buffer">
+            <span class="buffer-label">sequence buffer</span>
+            <code id="buffer">—</code>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Bindings</h2>
+          <ul class="bindings" id="bindings"></ul>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h2>List <span class="scope-tag" id="scope-tag">global scope</span></h2>
+          <ul class="list" id="list">
+            <li class="item is-active">Write the release notes</li>
+            <li class="item">Review the dependency graph PR</li>
+            <li class="item">Answer the support thread</li>
+            <li class="item">Plan tomorrow's contribution</li>
+          </ul>
+          <p class="hint">Use <kbd>j</kbd> / <kbd>k</kbd> once the list scope is enabled.</p>
+        </div>
+
+        <div class="card">
+          <h2>Fired</h2>
+          <ol class="log" id="log">
+            <li class="empty">Nothing yet — press a binding.</li>
+          </ol>
+        </div>
+      </section>
+    </main>
+
+    <div class="overlay" id="overlay" hidden>
+      <div class="overlay-card">
+        <h2>Help</h2>
+        <ul class="bindings" id="help-bindings"></ul>
+        <p class="hint">Press <kbd>Escape</kbd> or <kbd>?</kbd> to close.</p>
+      </div>
+    </div>
+
+    <script type="module">
+      import { createShortcuts, isEditableTarget } from "./keyboard-shortcuts.js";
+
+      const shortcuts = createShortcuts({ platform: "auto", sequenceTimeout: 900 });
+
+      const searchInput = document.getElementById("search");
+      const scopeToggle = document.getElementById("scope-toggle");
+      const scopeTag = document.getElementById("scope-tag");
+      const helpToggle = document.getElementById("help-toggle");
+      const overlay = document.getElementById("overlay");
+      const logList = document.getElementById("log");
+      const bufferEl = document.getElementById("buffer");
+      const bindingsEl = document.getElementById("bindings");
+      const helpBindingsEl = document.getElementById("help-bindings");
+      const listEl = document.getElementById("list");
+
+      document.getElementById("platform").textContent = `platform: ${shortcuts.platform}`;
+
+      let logCount = 0;
+
+      function log(text) {
+        if (logCount === 0) logList.innerHTML = "";
+        logCount += 1;
+        const item = document.createElement("li");
+        const time = new Date().toLocaleTimeString();
+        item.textContent = `${text}  ·  ${time}`;
+        logList.prepend(item);
+        while (logList.children.length > 8) logList.lastElementChild.remove();
+      }
+
+      const notTyping = (event) => !isEditableTarget(event.target);
+
+      // --- Bindings -----------------------------------------------------------
+
+      shortcuts.register(
+        "Mod+K",
+        () => {
+          searchInput.focus();
+          searchInput.select();
+          log("Open search");
+        },
+        { description: "Open search" },
+      );
+
+      shortcuts.register(
+        "Mod+Shift+Backspace",
+        () => {
+          searchInput.value = "";
+          log("Clear search");
+        },
+        { description: "Clear search field" },
+      );
+
+      shortcuts.register("g d", () => log("Go to dashboard"), {
+        description: "Go to dashboard (g then d)",
+        when: notTyping,
+      });
+
+      shortcuts.register("g t", () => log("Go to tasks"), {
+        description: "Go to tasks (g then t)",
+        when: notTyping,
+      });
+
+      shortcuts.register(
+        "?",
+        () => toggleHelp(),
+        { description: "Toggle this help", when: notTyping },
+      );
+
+      shortcuts.register(
+        "Escape",
+        () => {
+          if (!overlay.hidden) {
+            toggleHelp(false);
+            log("Closed help");
+            return;
+          }
+          searchInput.blur();
+          log("Blurred search");
+        },
+        { description: "Close the top panel" },
+      );
+
+      shortcuts.register("Shift+D", () => toggleTheme(), {
+        description: "Toggle dark mode",
+        when: notTyping,
+      });
+
+      shortcuts.register("j", () => moveSelection(1), {
+        description: "Next list item",
+        scope: "list",
+        when: notTyping,
+      });
+
+      shortcuts.register("k", () => moveSelection(-1), {
+        description: "Previous list item",
+        scope: "list",
+        when: notTyping,
+      });
+
+      // --- Behaviour ----------------------------------------------------------
+
+      function toggleHelp(force) {
+        const next = force === undefined ? overlay.hidden : force;
+        overlay.hidden = !next;
+        helpToggle.textContent = next ? "Close help (?)" : "Help (?)";
+        if (next) log("Help opened");
+      }
+
+      function toggleTheme() {
+        const dark = document.documentElement.classList.toggle("dark");
+        log(dark ? "Dark mode on" : "Dark mode off");
+      }
+
+      function moveSelection(step) {
+        const items = [...listEl.children];
+        const current = items.findIndex((item) => item.classList.contains("is-active"));
+        const next = (current + step + items.length) % items.length;
+        items.forEach((item, index) => item.classList.toggle("is-active", index === next));
+        log(`Selection: ${items[next].textContent}`);
+      }
+
+      function setScope(enabled) {
+        if (enabled) shortcuts.pushScope("list");
+        else shortcuts.popScope("list");
+        const active = shortcuts.activeScope === "list";
+        scopeToggle.textContent = active ? "Disable “list” scope" : "Enable “list” scope";
+        scopeTag.textContent = active ? "list scope" : "global scope";
+        listEl.classList.toggle("is-scoped", active);
+      }
+
+      scopeToggle.addEventListener("click", () => {
+        setScope(shortcuts.activeScope !== "list");
+        renderBuffer();
+      });
+      helpToggle.addEventListener("click", () => toggleHelp());
+      document.getElementById("reset").addEventListener("click", () => {
+        logCount = 0;
+        logList.innerHTML = '<li class="empty">Nothing yet — press a binding.</li>';
+      });
+
+      // --- Rendering the cheat sheet -----------------------------------------
+
+      function renderBindings() {
+        const items = shortcuts
+          .list()
+          .map((item) => {
+            const li = document.createElement("li");
+            const keys = document.createElement("span");
+            keys.className = "keys";
+            for (const part of shortcuts.format(item.spec).split(" ")) {
+              const kbd = document.createElement("kbd");
+              kbd.textContent = part;
+              keys.append(kbd);
+            }
+            const label = document.createElement("span");
+            label.className = "label";
+            label.textContent = item.description || item.spec;
+            if (item.scopes[0] !== "global") {
+              const tag = document.createElement("span");
+              tag.className = "tag";
+              tag.textContent = item.scopes.join(", ");
+              label.append(tag);
+            }
+            li.append(keys, label);
+            return li;
+          });
+        bindingsEl.replaceChildren(...items);
+        helpBindingsEl.replaceChildren(
+          ...items.map((item) => {
+            const clone = item.cloneNode(true);
+            return clone;
+          }),
+        );
+      }
+
+      function renderBuffer() {
+        const buffer = shortcuts.buffer;
+        bufferEl.textContent = buffer.length === 0 ? "—" : buffer.join(" ");
+        bufferEl.classList.toggle("is-waiting", shortcuts.waiting);
+      }
+
+      // --- Wiring -------------------------------------------------------------
+
+      document.addEventListener("keydown", (event) => {
+        const result = shortcuts.handle(event);
+        if (result.matched && result.preventDefault) event.preventDefault();
+        renderBuffer();
+      });
+
+      // A waiting prefix ("g") should fire once its window closes.
+      setInterval(() => {
+        const result = shortcuts.flush();
+        if (result.matched) log(`Flushed ${shortcuts.format(result.shortcut.spec)}`);
+        renderBuffer();
+      }, 120);
+
+      renderBindings();
+      renderBuffer();
+    </script>
+  </body>
+</html>
