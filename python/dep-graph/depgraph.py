@@ -17,8 +17,11 @@ Cycle handling is a first-class concern rather than an afterthought: instead
 of a bare "circular dependency" error, ``find_cycle()`` returns the offending
 path (``("a", "b", "c", "a")``) so the message points at the actual loop.
 
-Node names must be non-empty strings. That restriction is deliberate -- it is
-what makes the tie-breaking, sorting, and error messages deterministic.
+Node names must be non-empty, printable strings (no whitespace-only names, no
+control characters). That restriction is deliberate -- it is what makes the
+tie-breaking, sorting, and error messages deterministic, and it keeps a name
+from forging an extra line in the ``CycleError`` message that a CI log will
+faithfully print.
 
     from depgraph import Graph, CycleError
 
@@ -43,11 +46,26 @@ __all__ = ["CycleError", "Graph", "UnknownNodeError"]
 
 
 def _check_name(name: object, what: str = "node") -> str:
-    """Validate a node name, returning it typed as ``str``."""
+    """Validate a node name, returning it typed as ``str``.
+
+    Names are not just dict keys here: they are interpolated into
+    ``CycleError`` messages, ``UnknownNodeError`` messages and ``repr()``
+    output, all of which end up in terminal and CI logs. A name containing a
+    newline would therefore forge a whole extra log line, so control
+    characters are rejected outright. Whitespace-only names are rejected too,
+    because they are indistinguishable from a typo when they appear in an
+    error message.
+    """
     if not isinstance(name, str):
         raise TypeError(f"{what} name must be a str, got {type(name).__name__}")
-    if not name:
-        raise ValueError(f"{what} name must not be empty")
+    if not name.strip():
+        raise ValueError(f"{what} name must not be empty or whitespace-only")
+    if any(ch < " " or ch == "\x7f" for ch in name):
+        # repr() in the message escapes the offender, so the error itself is
+        # always a single line even when the rejected name was not.
+        raise ValueError(
+            f"{what} name must not contain control characters: {name!r}"
+        )
     return name
 
 
@@ -130,9 +148,25 @@ class Graph:
         self._dependents[depends_on].add(node)
         return self
 
-    def add_dependencies(self, node: str, depends_on: Iterable[str]) -> Graph:
-        """Record several dependencies of one node at once."""
-        for dep in depends_on:
+    def add_dependencies(self, node: str, depends_on: Iterable[str] | str) -> Graph:
+        """Record several dependencies of one node at once.
+
+        A bare string is read as a *single* dependency name, matching
+        ``from_mapping``. Without that guard ``add_dependencies("test",
+        "lint")`` would iterate the string and quietly register four
+        single-character nodes (``l``, ``i``, ``n``, ``t``) -- a corrupt graph
+        that still passes every downstream call.
+
+        ``node`` is registered even when ``depends_on`` is empty, and every
+        name is validated before any edge is written, so a bad entry leaves
+        the graph exactly as it was.
+        """
+        node = _check_name(node)
+        deps = (depends_on,) if isinstance(depends_on, str) else tuple(depends_on)
+        for dep in deps:
+            _check_name(dep, "dependency")
+        self.add_node(node)
+        for dep in deps:
             self.add_dependency(node, dep)
         return self
 
@@ -176,10 +210,21 @@ class Graph:
         return len(self._deps)
 
     def __contains__(self, node: object) -> bool:
-        return node in self._deps
+        """Membership test. Anything that cannot be a name is simply absent.
+
+        Returning ``False`` for non-strings (rather than letting the dict
+        lookup raise ``TypeError`` on an unhashable argument) keeps
+        ``if name in graph`` usable when ``name`` comes straight from
+        untrusted input.
+        """
+        return isinstance(node, str) and node in self._deps
 
     def __repr__(self) -> str:
-        return f"Graph({len(self._deps)} nodes, {len(self.edges)} edges)"
+        # Counting the edges with sum() keeps repr() O(V + E); going through
+        # self.edges would sort every adjacency set just to take its length,
+        # which is a lot of allocation for a debugging string.
+        edge_count = sum(len(deps) for deps in self._deps.values())
+        return f"Graph({len(self._deps)} nodes, {edge_count} edges)"
 
     def _require(self, node: object) -> str:
         node = _check_name(node)
@@ -214,8 +259,11 @@ class Graph:
                     heapq.heappush(ready, dependent)
 
         if len(order) != len(self._deps):
-            # The nodes left over are exactly the ones inside cycles.
-            raise CycleError(self.find_cycle() or ())
+            # The nodes left over are exactly the ones inside cycles, so this
+            # walk always finds one. The None branch is defensive only: it
+            # keeps the failure a CycleError rather than an AttributeError.
+            cycle = self.find_cycle()
+            raise CycleError(cycle if cycle is not None else ())
         return tuple(order)
 
     def layers(self) -> tuple[tuple[str, ...], ...]:
@@ -245,6 +293,12 @@ class Graph:
         have, no matter how much parallelism is available. Ties are broken
         by taking the lexicographically smallest chain, so the answer is
         stable.
+
+        Memory is O(V * L) in the worst case, where *L* is the length of the
+        chain, because each node memoises its own prefix as a tuple. That is
+        fine for the build graphs this module targets (thousands of nodes,
+        chains in the tens); a million-node chain would want a predecessor
+        array instead.
         """
         order = self.topological_order()
         best: dict[str, tuple[str, ...]] = {}
