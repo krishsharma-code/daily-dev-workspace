@@ -28,7 +28,7 @@ No third-party packages. Python 3.9+.
 ```bash
 cd python/dep-graph
 python example.py        # demo: schedule a release pipeline, then break it
-python -m pytest -q      # 48 tests
+python -m pytest -q      # 77 tests
 ```
 
 ## Use it
@@ -70,7 +70,7 @@ purely from edges.
 | `Graph.from_mapping({node: deps})` | graph from a dict; a bare string means one dependency |
 | `add_node(name)` | `self` (chainable) |
 | `add_dependency(node, depends_on)` | `self`; registers both endpoints |
-| `add_dependencies(node, iterable)` | `self` |
+| `add_dependencies(node, iterable)` | `self`; a bare string means one dependency |
 | `remove_node(name)` | `self`; drops every edge touching the node |
 | `.nodes`, `.edges` | sorted tuples |
 | `dependencies_of(node)` | direct dependencies, sorted |
@@ -83,10 +83,24 @@ purely from edges.
 | `impacted_by(node)` | all transitive dependents, excluding the node itself |
 | `subgraph(names)` | new graph over just those nodes; exit edges dropped |
 
-Node names must be non-empty `str` — that is what makes ordering and messages
-deterministic. Anything else raises `TypeError` / `ValueError`. Looking up a
-name that was never added raises `UnknownNodeError` (a `KeyError`).
-`CycleError` is a `ValueError` and carries the path in `.cycle`.
+Node names must be non-empty, printable `str` — that is what makes ordering and
+messages deterministic. Anything else raises `TypeError` / `ValueError`:
+
+- non-`str` names raise `TypeError`;
+- empty and whitespace-only names raise `ValueError`;
+- names containing control characters (`\n`, `\r`, `\t`, `\x00`, `\x7f`, …)
+  raise `ValueError`, because names are interpolated into `CycleError` and
+  `UnknownNodeError` messages that a CI log will print verbatim — a newline in
+a name would forge an extra log line. The rejection message uses `repr()`, so
+the error itself is always a single line.
+
+`add_dependencies(node, deps)` validates every name *before* it writes any
+edge, so a bad entry leaves the graph unchanged rather than half-built.
+
+Looking up a name that was never added raises `UnknownNodeError` (a
+`KeyError`). `CycleError` is a `ValueError` and carries the path in `.cycle`.
+`name in graph` returns `False` for anything that is not a `str`, so it is
+safe to use directly on untrusted input.
 
 ## Notes on the algorithms
 
