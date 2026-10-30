@@ -388,3 +388,163 @@ def test_migration_graph_end_to_end():
 def test_repr_reports_size():
     g = Graph.from_mapping({"a": [], "b": ["a"]})
     assert repr(g) == "Graph(2 nodes, 1 edges)"
+
+
+# ----------------------------------------------------------------------
+# Input hardening (security boundary)
+#
+# Node names are interpolated into error messages that land in terminal and
+# CI logs, so they are treated as untrusted input: printable, non-blank,
+# bounded strings only.
+# ----------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",           # empty
+        " ",          # single space
+        "   \t ",     # whitespace only
+        "a\nb",       # newline -> would forge a log line
+        "a\rb",       # carriage return
+        "\x00",       # NUL
+        "deploy\x7f", # DEL
+    ],
+)
+def test_blank_and_control_character_names_are_rejected(bad):
+    g = Graph()
+    with pytest.raises(ValueError):
+        g.add_node(bad)
+    with pytest.raises(ValueError):
+        g.add_dependency("a", bad)
+    with pytest.raises(ValueError):
+        g.add_dependency(bad, "a")
+    assert g.nodes == ()
+
+
+def test_names_with_inner_spaces_are_still_allowed():
+    # Rejecting control characters must not reject legitimate names.
+    g = Graph.from_mapping({"build image": ["install deps"], "install deps": []})
+    assert g.topological_order() == ("install deps", "build image")
+
+
+def test_rejection_message_escapes_the_hostile_name():
+    # The error itself must stay a single line even though the input was not.
+    with pytest.raises(ValueError) as info:
+        Graph().add_node("a\nforged: everything is fine")
+    assert "\n" not in str(info.value)
+    assert "forged" in str(info.value)  # shown escaped, via repr()
+
+
+def test_cycle_message_is_single_line():
+    g = Graph.from_mapping({"web": ["api"], "api": ["db"], "db": ["web"]})
+    with pytest.raises(CycleError) as info:
+        g.validate()
+    assert "\n" not in str(info.value)
+    assert info.value.cycle == ("web", "api", "db", "web")
+
+
+# ----------------------------------------------------------------------
+# add_dependencies: the bare-string footgun and atomic validation
+# ----------------------------------------------------------------------
+def test_add_dependencies_treats_bare_string_as_one_dependency():
+    # Iterating "lint" would otherwise register the nodes l, i, n, t.
+    g = Graph().add_dependencies("test", "lint")
+    assert g.nodes == ("lint", "test")
+    assert g.dependencies_of("test") == ("lint",)
+    assert len(g.edges) == 1
+
+
+def test_add_dependencies_registers_node_when_list_is_empty():
+    g = Graph().add_dependencies("deploy", [])
+    assert "deploy" in g
+    assert g.dependencies_of("deploy") == ()
+
+
+def test_add_dependencies_validates_node_name_even_with_no_dependencies():
+    with pytest.raises(TypeError):
+        Graph().add_dependencies(123, [])
+    with pytest.raises(ValueError):
+        Graph().add_dependencies("", [])
+
+
+def test_add_dependencies_is_atomic_on_a_bad_dependency():
+    g = Graph.from_mapping({"a": []})
+    with pytest.raises(TypeError):
+        g.add_dependencies("a", ["ok", 7, "never-reached"])
+    # Nothing was written, not even the valid prefix.
+    assert g.nodes == ("a",)
+    assert g.edges == ()
+
+
+def test_add_dependencies_accepts_any_iterable():
+    g = Graph().add_dependencies("deploy", (name for name in ["test", "build"]))
+    assert g.dependencies_of("deploy") == ("build", "test")
+
+
+# ----------------------------------------------------------------------
+# Membership and repr under untrusted input / large graphs
+# ----------------------------------------------------------------------
+@pytest.mark.parametrize("bad", [None, 1, 3.5, ["a"], {"a"}, ("a",)])
+def test_contains_returns_false_for_non_names(bad):
+    # `in` should answer "no", not raise TypeError on an unhashable argument.
+    assert (bad in Graph().add_node("a")) is False
+
+
+def test_contains_still_finds_real_names():
+    g = Graph().add_node("a")
+    assert ("a" in g) is True
+    assert ("b" in g) is False
+
+
+def test_repr_counts_edges_without_sorting_them():
+    g = Graph.from_mapping({f"n{i}": ["root"] for i in range(50)})
+    assert repr(g) == "Graph(51 nodes, 50 edges)"
+
+
+# ----------------------------------------------------------------------
+# Scale: no recursion, no quadratic blow-up on a long chain
+# ----------------------------------------------------------------------
+def test_deep_chain_does_not_hit_the_recursion_limit():
+    size = 3000
+    g = Graph.from_mapping(
+        {f"n{i:04d}": ([f"n{i - 1:04d}"] if i else []) for i in range(size)}
+    )
+    assert len(g.topological_order()) == size
+    assert g.find_cycle() is None
+    assert len(g.layers()) == size
+    assert len(g.critical_path()) == size
+    assert len(g.impacted_by("n0000")) == size - 1
+
+
+def test_wide_graph_layers_are_single_round():
+    g = Graph.from_mapping({f"n{i}": [] for i in range(500)})
+    assert len(g.layers()) == 1
+    assert len(g.layers()[0]) == 500
+
+
+# ----------------------------------------------------------------------
+# Cycles: shape of the reported path
+# ----------------------------------------------------------------------
+def test_self_loop_is_reported_as_a_two_node_cycle():
+    g = Graph.from_mapping({"a": ["a"]})
+    with pytest.raises(CycleError) as info:
+        g.validate()
+    assert info.value.cycle == ("a", "a")
+    assert g.find_cycle() == ("a", "a")
+
+
+def test_ordering_methods_propagate_cycle_errors():
+    g = Graph.from_mapping({"a": ["b"], "b": ["a"]})
+    for call in (g.topological_order, g.layers, g.critical_path):
+        with pytest.raises(CycleError):
+            call()
+
+
+def test_impacted_by_excludes_the_node_itself_inside_a_cycle():
+    g = Graph.from_mapping({"a": ["b"], "b": ["a"], "c": ["a"]})
+    assert g.impacted_by("a") == ("b", "c")
+
+
+def test_critical_path_tie_break_is_lexicographic():
+    # Two equally long chains; the alphabetically smaller one wins.
+    g = Graph.from_mapping({"a": [], "z": [], "m1": ["a"], "m2": ["z"], "top": ["m1", "m2"]})
+    assert g.critical_path() == ("a", "m1", "top")
