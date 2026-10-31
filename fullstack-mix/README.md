@@ -11,6 +11,9 @@ Mixed projects that combine a front end and a back end. Each project is split in
 - [`webhook-inbox/`](webhook-inbox/) — capture, inspect and replay webhook
   deliveries locally: a stdlib Python server (SQLite + REST API) with a vanilla
   HTML/CSS/JS inspector.
+- [`markdown-notes/`](markdown-notes/) — a Markdown notebook with live preview:
+  a stdlib Python server (SQLite + REST API, escape-first Markdown renderer)
+  with a vanilla HTML/CSS/JS client.
 
 ## Conventions
 
