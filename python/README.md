@@ -7,6 +7,7 @@ Pure Python work: scripts, packages, tests, and middleware.
 - [`cron-schedule/`](cron-schedule/) — parse five-field cron expressions and compute upcoming fire times
 - [`data-cleaner/`](data-cleaner/) — clean and normalise tabular records
 - [`dep-graph/`](dep-graph/) — deterministic dependency graph: ordering, layers, cycles, impact
+- [`expr-eval/`](expr-eval/) — safe arithmetic and logic expression evaluator (no `eval`)
 - [`json-diff/`](json-diff/) — RFC 6902 JSON Patch diff and apply
 - [`rate-limiter/`](rate-limiter/) — token bucket and sliding window rate limiters
 
