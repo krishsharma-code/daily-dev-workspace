@@ -19,6 +19,10 @@ cases right and making them testable:
   miss?" by walking `iter_after` backwards from a stored watermark.
 - **Errors name the field.** `CronError` messages say which field and which
   value, e.g. `hour field: 24 is outside 0-23`.
+- **One error contract.** Bad *input* raises `CronError`; a schedule that can
+  never fire raises `ScheduleExhausted`, a `CronError` subclass. Nothing else
+  escapes, including for non-ASCII digits or a start time near
+  `datetime.max`.
 
 No third-party packages. Python 3.9+.
 
@@ -27,7 +31,7 @@ No third-party packages. Python 3.9+.
 ```bash
 cd python/cron-schedule
 python example.py        # demo: describe schedules, list upcoming runs
-python -m pytest -q      # 81 tests
+python -m pytest -q      # 138 tests
 ```
 
 ## Use it
@@ -81,7 +85,8 @@ while True:
 | `describe()` | short English rendering of the schedule |
 
 `next_after` and `iter_after` accept naive or aware datetimes; an aware value
-keeps its `tzinfo`. Non-`datetime` arguments raise `TypeError`.
+keeps its `tzinfo`. Non-`datetime` arguments raise `TypeError`, and the message
+names the method that was called.
 
 ## Expression syntax
 
@@ -121,6 +126,15 @@ naming the field.
 - **Search horizon is eight years**, which always contains a 29 February. Past
   that, `ScheduleExhausted` is raised — that only happens for schedules that
   can never fire, such as `31 February` or `30 February`.
+- **Fields are ASCII digits.** `str.isdigit()` accepts characters such as `²`
+  that `int()` rejects, so the parser checks for ASCII explicitly. Non-ASCII
+  digit characters raise `CronError` instead of parsing or crashing.
+- **The horizon respects `datetime`'s own limits.** A start time close enough
+  to `9999-12-31` that the eight-year horizon cannot be searched raises
+  `ScheduleExhausted` (with a message saying so) rather than `OverflowError`.
+- **`iter_after` is all or nothing.** If the horizon runs out part-way through,
+  it raises `ScheduleExhausted` and returns no partial tuple, so a short list
+  is never mistaken for the whole schedule.
 
 ## Layout
 
@@ -131,5 +145,6 @@ python/cron-schedule/
 ├── cronschedule.py                # the implementation
 ├── example.py                     # runnable demo
 └── tests/
-    └── test_cronschedule.py
+    ├── test_cronschedule.py        # parsing, matching, search, describe
+    └── test_robustness.py          # hostile input, calendar limits, invariants
 ```

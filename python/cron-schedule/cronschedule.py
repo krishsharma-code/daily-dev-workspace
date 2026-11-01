@@ -12,6 +12,12 @@ The expression is compiled once into sets of allowed values, so answering
 "when does this fire next?" never scans minute by minute through empty space:
 the search jumps to the next allowed month, then the next matching day, then
 the next allowed hour and minute inside that day.
+
+Error contract: every rejected *expression* raises ``CronError`` (a
+``ValueError``), and every schedule that cannot fire inside the search
+horizon raises ``ScheduleExhausted``. Callers can therefore wrap parsing and
+scheduling in a single ``except CronError``; no other exception type escapes
+from parsing, including for exotic Unicode input.
 """
 
 from __future__ import annotations
@@ -62,14 +68,27 @@ class ScheduleExhausted(CronError):
     """Raised when an expression has no fire time within the search horizon."""
 
 
+def _parse_uint(token):
+    """Return ``token`` as an int if it is ASCII digits, else ``None``.
+
+    ``str.isdigit()`` is not enough on its own: it is true for characters such
+    as ``"²"`` and ``"٥"``, and ``int()`` raises ``ValueError`` on some of
+    them. Restricting the check to ASCII keeps every rejection on the
+    ``CronError`` path and keeps cron fields to the ASCII digits that
+    ``crontab(5)`` defines.
+    """
+    if token.isascii() and token.isdigit():
+        return int(token)
+    return None
+
+
 def _lookup(token, names, lo, hi, field):
     """Resolve one field token to an integer, or raise a helpful CronError."""
     text = token.strip().lower()
-    if text.isdigit():
-        value = int(text)
-    elif names and text in names:
+    value = _parse_uint(text)
+    if value is None and names and text in names:
         value = names[text]
-    else:
+    if value is None:
         known = f" or one of {', '.join(sorted(names))}" if names else ""
         raise CronError(
             f"{field} field: {token!r} is not a number{known}"
@@ -92,11 +111,11 @@ def _parse_field(text, lo, hi, field, names=None, normalize=None):
             base, _, step_text = term.partition("/")
             if not base:
                 raise CronError(f"{field} field: missing value before '/' in {term!r}")
-            if not step_text.isdigit() or int(step_text) == 0:
+            step = _parse_uint(step_text)
+            if not step:
                 raise CronError(
                     f"{field} field: step {step_text!r} must be a positive integer"
                 )
-            step = int(step_text)
 
         if base == "*":
             start, end = lo, hi
@@ -262,13 +281,38 @@ class CronExpression:
 
         ``moment`` may be naive or timezone-aware; an aware value keeps its
         ``tzinfo`` and is advanced in wall-clock terms (no DST correction).
+        The result is always strictly later than ``moment`` and always on a
+        minute boundary. Raises ``ScheduleExhausted`` when nothing matches
+        within the eight-year horizon, including when the horizon would run
+        past ``datetime.max``.
         """
         if not isinstance(moment, dt.datetime):
             raise TypeError("next_after() expects a datetime")
 
-        current = (moment + dt.timedelta(minutes=1)).replace(second=0, microsecond=0)
-        limit = current + dt.timedelta(days=_HORIZON_DAYS)
+        try:
+            current = (moment + dt.timedelta(minutes=1)).replace(
+                second=0, microsecond=0)
+            limit = current + dt.timedelta(days=_HORIZON_DAYS)
+            return self._search(current, limit, moment)
+        except OverflowError:
+            # datetime stops at 9999-12-31, so a start time close to it cannot
+            # be searched for the full horizon. Report that as "no fire time"
+            # rather than leaking an OverflowError past the CronError contract.
+            raise ScheduleExhausted(
+                f"{self.expression!r} has no fire time within "
+                f"{_HORIZON_DAYS} days of {moment.isoformat()}: "
+                "the search would run past the limits of datetime"
+            ) from None
 
+    def _search(self, current, limit, origin):
+        """Walk forward from ``current`` to the next fire time before ``limit``.
+
+        ``current`` must already sit on a minute boundary. Each branch makes a
+        single jump over a whole block of minutes that cannot possibly match,
+        so the loop runs a few times per calendar boundary rather than once per
+        minute; ``origin`` is carried only so the exhaustion message can name
+        the caller's start time.
+        """
         while current <= limit:
             if current.month not in self.months:
                 current = _next_month_start(current)
@@ -297,11 +341,21 @@ class CronExpression:
 
         raise ScheduleExhausted(
             f"{self.expression!r} has no fire time within "
-            f"{_HORIZON_DAYS} days of {moment.isoformat()}"
+            f"{_HORIZON_DAYS} days of {origin.isoformat()}"
         )
 
     def iter_after(self, moment, count):
-        """The next ``count`` fire times, as a tuple of datetimes."""
+        """The next ``count`` fire times, as a tuple of datetimes.
+
+        ``count`` must be a non-negative int; ``0`` returns ``()``. ``moment``
+        must be a ``datetime``, naive or aware, exactly as for
+        :meth:`next_after`. Raises ``ScheduleExhausted`` if the schedule runs
+        out of horizon part-way through, in which case no partial tuple is
+        returned -- the caller gets an error rather than a short list it might
+        mistake for "that is all of them".
+        """
+        if not isinstance(moment, dt.datetime):
+            raise TypeError("iter_after() expects a datetime")
         if isinstance(count, bool) or not isinstance(count, int):
             raise TypeError("count must be an int")
         if count < 0:
