@@ -5,6 +5,7 @@ Standalone front-end work: HTML, CSS, and modern JavaScript components and utili
 ## Modules
 
 - [`color-kit/`](color-kit/) — dependency-free colour parsing, conversion, blending and WCAG contrast utilities.
+- [`csv-table/`](csv-table/) — RFC 4180 CSV parser and writer with delimiter detection and object mapping.
 - [`fuzzy-matcher/`](fuzzy-matcher/) — fuzzy subsequence matching and ranking for typeahead search.
 - [`keyboard-shortcuts/`](keyboard-shortcuts/) — shortcut registry with chord/sequence matching, scopes and platform-aware labels.
 - [`undo-stack/`](undo-stack/) — undo/redo history manager with keystroke coalescing and transactions.

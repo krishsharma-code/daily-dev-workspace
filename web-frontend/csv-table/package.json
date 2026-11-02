@@ -1,0 +1,11 @@
+{
+  "name": "csv-table",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free RFC 4180 CSV parser and writer with delimiter detection, for the browser and Node.",
+  "main": "csv-table.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}
