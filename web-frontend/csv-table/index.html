@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>csv-table — parse and write CSV in the browser</title>
+    <link rel="stylesheet" href="csv-table.css" />
+  </head>
+  <body>
+    <header>
+      <h1>csv-table</h1>
+      <p>
+        Paste delimited text on the left. The table on the right is what
+        <code>parseCsv()</code> makes of it — quoted fields, embedded newlines,
+        doubled quotes and all. Change the options to see delimiter detection and
+        header handling at work.
+      </p>
+    </header>
+
+    <div class="controls">
+      <label>
+        Delimiter
+        <select id="delimiter">
+          <option value="auto" selected>auto-detect</option>
+          <option value=",">comma</option>
+          <option value=";">semicolon</option>
+          <option value="tab">tab</option>
+          <option value="|">pipe</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="header" checked /> First row is a header</label>
+      <label><input type="checkbox" id="trim" /> Trim whitespace</label>
+      <label><input type="checkbox" id="skipEmpty" checked /> Skip empty lines</label>
+      <label><input type="checkbox" id="strict" /> Strict</label>
+    </div>
+
+    <div class="panes">
+      <section class="pane">
+        <h2>Input</h2>
+        <textarea id="input" spellcheck="false" aria-label="CSV input"></textarea>
+      </section>
+      <section class="pane">
+        <h2>Parsed table</h2>
+        <div class="table-scroll">
+          <table id="table">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <p class="error" id="error" hidden></p>
+
+    <p class="status">
+      <span>Delimiter: <strong id="statDelimiter">—</strong></span>
+      <span>Columns: <strong id="statColumns">—</strong></span>
+      <span>Rows: <strong id="statRows">—</strong></span>
+    </p>
+
+    <details>
+      <summary>Round-tripped output from <code>stringifyCsv()</code></summary>
+      <pre id="output"></pre>
+    </details>
+
+    <script type="module">
+      import { parseCsv, stringifyCsv } from "./csv-table.js";
+
+      const SAMPLE = [
+        "city,state,population_2011,notes",
+        'Mumbai,Maharashtra,12442373,"Largest city; capital of Maharashtra"',
+        'Delhi,Delhi,11034555,"Union territory, with a legislature"',
+        'Bengaluru,Karnataka,8443675,"Known as ""Garden City"""',
+        'Pune,Maharashtra,3124458,"Cultural capital, of Maharashtra"',
+      ].join("\n") + "\n";
+
+      const input = document.getElementById("input");
+      const table = document.getElementById("table");
+      const thead = table.querySelector("thead");
+      const tbody = table.querySelector("tbody");
+      const errorBox = document.getElementById("error");
+      const output = document.getElementById("output");
+
+      const statDelimiter = document.getElementById("statDelimiter");
+      const statColumns = document.getElementById("statColumns");
+      const statRows = document.getElementById("statRows");
+
+      const controls = {
+        delimiter: document.getElementById("delimiter"),
+        header: document.getElementById("header"),
+        trim: document.getElementById("trim"),
+        skipEmpty: document.getElementById("skipEmpty"),
+        strict: document.getElementById("strict"),
+      };
+
+      const DELIMITER_LABELS = new Map([
+        [",", "comma ( , )"],
+        [";", "semicolon ( ; )"],
+        ["\t", "tab"],
+        ["|", "pipe ( | )"],
+      ]);
+
+      function cell(tag, text, className) {
+        const node = document.createElement(tag);
+        node.textContent = text;
+        if (className) node.className = className;
+        return node;
+      }
+
+      function render(parsed) {
+        thead.replaceChildren();
+        tbody.replaceChildren();
+
+        const columns = parsed.headers ?? Array.from(
+          { length: Math.max(0, ...parsed.rows.map((row) => row.length)) },
+          (_, index) => `column${index + 1}`,
+        );
+
+        const headerRow = document.createElement("tr");
+        headerRow.append(cell("th", "#", "index"));
+        for (const name of columns) headerRow.append(cell("th", name));
+        thead.append(headerRow);
+
+        parsed.rows.forEach((row, index) => {
+          const tr = document.createElement("tr");
+          tr.append(cell("td", String(index + 1), "index"));
+          for (let column = 0; column < columns.length; column += 1) {
+            tr.append(cell("td", row[column] ?? ""));
+          }
+          tbody.append(tr);
+        });
+
+        if (parsed.rows.length === 0) {
+          const tr = document.createElement("tr");
+          const td = cell("td", "No data rows.");
+          td.colSpan = columns.length + 1;
+          tr.append(td);
+          tbody.append(tr);
+        }
+
+        statDelimiter.textContent = DELIMITER_LABELS.get(parsed.delimiter) ?? parsed.delimiter;
+        statColumns.textContent = String(columns.length);
+        statRows.textContent = String(parsed.rows.length);
+
+        output.textContent = stringifyCsv(parsed.rows, {
+          headers: parsed.headers,
+          delimiter: parsed.delimiter,
+        });
+      }
+
+      function update() {
+        try {
+          const chosen = controls.delimiter.value;
+          const parsed = parseCsv(input.value, {
+            delimiter: chosen === "tab" ? "\t" : chosen,
+            header: controls.header.checked,
+            trim: controls.trim.checked,
+            skipEmptyLines: controls.skipEmpty.checked,
+            strict: controls.strict.checked,
+          });
+          errorBox.hidden = true;
+          render(parsed);
+        } catch (error) {
+          errorBox.hidden = false;
+          errorBox.textContent = error.message;
+        }
+      }
+
+      input.value = SAMPLE;
+      input.addEventListener("input", update);
+      for (const control of Object.values(controls)) {
+        control.addEventListener("change", update);
+      }
+
+      update();
+    </script>
+  </body>
+</html>
