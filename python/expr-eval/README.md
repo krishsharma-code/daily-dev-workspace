@@ -110,12 +110,37 @@ import time if you need to.
 | --- | --- | --- | --- |
 | source length | `MAX_SOURCE_LENGTH` | 10 000 chars | a megabyte pasted into a config field |
 | tree size | `MAX_NODES` | 1 000 nodes | `1 + 1 + 1 + ...` a million times |
-| nesting depth | `MAX_DEPTH` | 64 levels | `((((...))))` and `-----1` chains, which would otherwise surface as `RecursionError` |
+| nesting depth | `MAX_DEPTH` | 64 levels | `((((...))))`, `-----1`, `2 ** 2 ** 2 ** ...` and `a if b else a if b else ...`, each of which would otherwise surface as `RecursionError` |
 | exponent | `MAX_EXPONENT` | 1 000 | `10 ** 100000`, which allocates a huge int |
-| repetition | `MAX_REPEAT` | 10 000 | `'x' * 1000000`, which allocates a huge string |
+| repetition count | `MAX_REPEAT` | 10 000 | `'x' * 1000000`, which allocates a huge string |
+| repetition size | `MAX_REPEAT_SIZE` | 10 000 elements | `items * 10000` where `items` is already long |
 
 `0 ** 100000` and `1 ** 100000` are still allowed — the result is small, so
 only a base larger than 1 in absolute value is refused.
+
+Bounding the repetition *count* alone is not enough, which is why there is a
+second limit: `items * 10_000` is within `MAX_REPEAT` however long `items`
+already is, so a caller-supplied list of a million entries would still allocate
+a billion. `MAX_REPEAT_SIZE` bounds the product instead.
+
+### Nesting is not the same as a long chain
+
+`MAX_DEPTH` measures *nesting* — `((((1))))` or a run of unary minus — and the
+depth guard is applied where the parser and evaluator actually recurse.
+A left-associative chain such as `1 + 1 + 1 + ...` folds into a left-leaning
+tree with no nesting at all, so the evaluator walks that spine iteratively and
+a flat 500-term sum evaluates normally. Only `MAX_NODES` bounds it.
+
+That distinction matters in both directions: before it was made explicit, a
+70-term sum parsed cleanly and then failed with `expression nests deeper than
+64 levels` — a message describing nesting the source never had — while a
+600-term `2 ** 2 ** 2 ** ...` chain, which *does* nest, escaped as a bare
+`RecursionError` rather than a `ParseError`.
+
+A literal that cannot be represented is refused at parse time: `1e999` used to
+become `inf` silently, even though an equally oversized integer literal was
+already a `ParseError`. Overflow produced by *evaluation* is untouched and
+still yields `inf`, as ordinary float arithmetic does.
 
 The limits are checked during parsing and evaluation, not by a timer, so a
 refused expression costs nothing. What they do *not* cover is a function you
@@ -130,7 +155,8 @@ python/expr-eval/
 ├── example.py                # runnable demo
 ├── conftest.py               # makes the module importable in tests
 └── tests/
-    └── test_expreval.py
+    ├── test_expreval.py          # language, operators, limits
+    └── test_chains_and_limits.py # chain evaluation and size/depth boundaries
 ```
 
 ## Run the demo
@@ -143,7 +169,8 @@ python example.py
 It walks a discount formula, a shipping rule and a seat-based discount over one
 order, compiles a tax formula once and reuses it at three rates, then shows the
 refusals: an unknown variable, a type mismatch, an assignment, an import
-attempt, a method call, and a runaway exponent.
+attempt, a method call, a runaway exponent, an overflowing literal and an
+oversized repetition.
 
 ## Run the tests
 
@@ -152,12 +179,14 @@ cd python/expr-eval
 python -m pytest
 ```
 
-85 tests: literals and escapes, operator precedence and associativity (both
+115 tests: literals and escapes, operator precedence and associativity (both
 `**` and chained comparisons), every operator's type errors, dotted paths and
 subscripts, default and caller-supplied functions, parse-error positions, and
-the safety limits — including that a 500-long unary chain raises `ParseError`
-rather than `RecursionError`. No third-party dependency at runtime; `pytest`
-is needed only to run the suite.
+the safety limits — including that a 500-long unary chain, a 600-term `**`
+chain and a long `if/else` chain all raise `ParseError` rather than
+`RecursionError`, that a flat 500-term sum still evaluates, and that repetition
+is bounded by total size as well as by count. No third-party dependency at
+runtime; `pytest` is needed only to run the suite.
 
 ## Example
 
