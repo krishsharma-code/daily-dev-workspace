@@ -14,6 +14,9 @@ Mixed projects that combine a front end and a back end. Each project is split in
 - [`markdown-notes/`](markdown-notes/) — a Markdown notebook with live preview:
   a stdlib Python server (SQLite + REST API, escape-first Markdown renderer)
   with a vanilla HTML/CSS/JS client.
+- [`feature-flags/`](feature-flags/) — a feature-flag service with
+  deterministic rollout bucketing and allowlists: a stdlib Python server
+  (SQLite + REST API) with a vanilla HTML/CSS/JS console.
 
 ## Conventions
 
