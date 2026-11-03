@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Feature Flags</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Feature Flags</h1>
+      <p class="subtitle">Deterministic rollouts, allowlists and a kill switch — local only.</p>
+    </div>
+    <div class="status" id="status" aria-live="polite">connecting…</div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>New flag</h2>
+      <form id="create-form" class="grid-form" autocomplete="off">
+        <label>
+          Key
+          <input id="new-key" name="key" placeholder="new-checkout" required
+                 pattern="[A-Za-z0-9][A-Za-z0-9._-]*" maxlength="64" />
+        </label>
+        <label>
+          Description
+          <input id="new-description" name="description" placeholder="What does this gate?" maxlength="280" />
+        </label>
+        <label>
+          Rollout (%)
+          <input id="new-rollout" name="rollout" type="number" min="0" max="100" step="1" value="0" />
+        </label>
+        <label>
+          Allowlist
+          <input id="new-allowlist" name="allowlist" placeholder="user-1, user-2" />
+        </label>
+        <button type="submit" class="primary">Create flag</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Flags</h2>
+        <button id="refresh" class="ghost" type="button">Refresh</button>
+      </div>
+      <p id="empty" class="empty" hidden>No flags yet — create one above.</p>
+      <ul id="flag-list" class="flag-list"></ul>
+    </section>
+
+    <section class="panel">
+      <h2>Evaluate as a user</h2>
+      <form id="evaluate-form" class="inline-form" autocomplete="off">
+        <input id="eval-user" placeholder="user-42" aria-label="User id" required />
+        <button type="submit" class="primary">Evaluate all flags</button>
+      </form>
+      <p class="hint">The same user always lands in the same bucket for the same flag.</p>
+      <ul id="eval-results" class="eval-list"></ul>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
