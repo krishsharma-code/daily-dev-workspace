@@ -25,10 +25,20 @@ Everything is bounded: source length, tree size, nesting depth, the size of
 ``**`` exponents and of string/list repetition.  Expressions typically arrive
 from a config file or a user, so an expression that would take a minute or a
 terabyte is rejected rather than served.
+
+Nesting and chains are different things, and the depth budget only measures
+nesting.  ``a + b + c`` folds into a left-leaning tree with no nesting at all,
+so the evaluator walks that spine iteratively; a flat 500-term sum therefore
+evaluates normally instead of being refused for "nesting".  Right-recursive
+chains that *do* nest -- ``2 ** 2 ** 2 ** ...`` and ``a if b else a if b
+else ...`` -- are depth-guarded in the parser, because an unguarded recursion
+there surfaced as ``RecursionError`` from a source well under the length
+limit, and ``RecursionError`` is not an :class:`ExprError`.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any, Callable, NamedTuple
 
@@ -53,6 +63,11 @@ MAX_DEPTH = 64
 MAX_EXPONENT = 1_000
 #: Largest repetition allowed for ``"x" * n`` and ``[..] * n``.
 MAX_REPEAT = 10_000
+#: Largest total size, in elements, of a repeated string or list.  Bounding the
+#: multiplier alone is not enough: ``items * 10_000`` is within ``MAX_REPEAT``
+#: however long ``items`` already is, so a caller-supplied list of a million
+#: entries would still allocate a billion.
+MAX_REPEAT_SIZE = 10_000
 
 
 class ExprError(Exception):
@@ -309,7 +324,14 @@ class _Parser:
         if self._accept_name("if"):
             test = self._or()
             self._expect_name("else")
-            otherwise = self._conditional()
+            # Guarded like _expression: 'a if b else a if b else ...' is a
+            # right-recursive chain, so without the guard a long enough source
+            # surfaces as RecursionError instead of ParseError.
+            self._guard_depth()
+            try:
+                otherwise = self._conditional()
+            finally:
+                self._release_depth()
             return self._node(("cond", test, node, otherwise))
         return node
 
@@ -394,7 +416,17 @@ class _Parser:
         if self._accept_op("**"):
             # Right-associative, and binds tighter than unary minus, so
             # -2 ** 2 is -(2 ** 2) = -4, as in Python.
-            return self._node(("bin", "**", base, self._unary()))
+            #
+            # Guarded because right-associativity makes '2 ** 2 ** 2 ** ...'
+            # a recursion chain: a few hundred terms of it escaped as
+            # RecursionError, which is not an ExprError and so not catchable
+            # by a caller that follows the documented contract.
+            self._guard_depth()
+            try:
+                exponent = self._unary()
+            finally:
+                self._release_depth()
+            return self._node(("bin", "**", base, exponent))
         return base
 
     def _postfix(self) -> tuple:
@@ -474,10 +506,22 @@ def _number_value(token: Token) -> int | float:
     text = str(token.value)
     try:
         if "." in text or "e" in text or "E" in text:
-            return float(text)
-        return int(text)
+            value = float(text)
+        else:
+            return int(text)
     except ValueError:  # e.g. a literal longer than int()'s digit limit
         raise ParseError(f"invalid number {text!r} at position {token.pos}") from None
+    # ``float()`` does not fail on an overflowing literal -- ``1e999`` quietly
+    # becomes ``inf`` -- so the non-finite check has to be explicit.  A literal
+    # is a constant written in the source, not a computed overflow, and letting
+    # it through would hand downstream arithmetic an ``inf`` that no
+    # ``MAX_EXPONENT`` guard ever saw.  Overflow of an *evaluation* still
+    # yields ``inf`` as ordinary float semantics require.
+    if not math.isfinite(value):
+        raise ParseError(
+            f"number literal {text!r} at position {token.pos} is not finite"
+        )
+    return value
 
 
 # --------------------------------------------------------------------------
@@ -533,6 +577,12 @@ def _repeat(op: str, left: Any, right: Any) -> Any:
         )
     if abs(count) > MAX_REPEAT:
         raise EvalError(f"repetition of {count} exceeds the limit of {MAX_REPEAT}")
+    if len(sequence) * abs(count) > MAX_REPEAT_SIZE:
+        raise EvalError(
+            f"repetition of a {len(sequence)}-element "
+            f"{_type_name(sequence)} {count} times exceeds the limit of "
+            f"{MAX_REPEAT_SIZE} elements"
+        )
     return sequence * count
 
 
@@ -599,6 +649,101 @@ def _resolve(path: tuple[str, ...], variables: Mapping[str, Any]) -> Any:
     return current
 
 
+def _apply_bin(op: str, left: Any, right: Any) -> Any:
+    """Apply a binary operator to two already-evaluated operands."""
+    if op == "+":
+        return _add(left, right)
+    if op == "-":
+        return _numeric("-", left, right)
+    if op == "*":
+        if isinstance(left, (str, list)) or isinstance(right, (str, list)):
+            return _repeat("*", left, right)
+        return _numeric("*", left, right)
+    if op in ("/", "//", "%"):
+        return _numeric(op, left, right)
+    return _power(left, right)  # "**"
+
+
+def _subscript(target: Any, index: Any) -> Any:
+    """Apply one ``target[index]`` lookup, with an explicit error message."""
+    if isinstance(target, Mapping):
+        try:
+            return target[index]
+        except (KeyError, TypeError):
+            raise EvalError(f"no such key {index!r}") from None
+    if isinstance(target, (list, tuple, str)):
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise EvalError(
+                f"subscript of {_type_name(target)} must be an integer, "
+                f"not {_type_name(index)}"
+            )
+        try:
+            return target[index]
+        except IndexError:
+            raise EvalError(
+                f"index {index} is out of range for a "
+                f"{_type_name(target)} of length {len(target)}"
+            ) from None
+    raise EvalError(f"{_type_name(target)} cannot be subscripted")
+
+
+def _eval_chain(
+    node: tuple,
+    variables: Mapping[str, Any],
+    functions: Mapping[str, Callable[..., Any]],
+    depth: int,
+) -> Any:
+    """Evaluate a left-associative ``bin``/``bool`` chain without recursing.
+
+    The parser folds ``a + b + c`` into a left-leaning tree, so evaluating it
+    one level at a time would recurse once per term and a flat 70-term sum
+    would trip the depth guard with a message about nesting the source never
+    had.  Walking the left spine iteratively costs one list of the same size
+    and keeps ``MAX_DEPTH`` for what it is meant to measure: genuine nesting.
+
+    Short-circuiting is preserved -- ``and``/``or`` still stop at the first
+    operand that settles the result, and still return that operand.
+    """
+    spine: list[tuple[str, str, tuple]] = []
+    while node[0] in ("bin", "bool"):
+        spine.append((node[0], node[1], node[3]))
+        node = node[2]
+    value = _eval(node, variables, functions, depth + 1)
+    for kind, op, right_node in reversed(spine):
+        if kind == "bin":
+            value = _apply_bin(
+                op, value, _eval(right_node, variables, functions, depth + 1)
+            )
+        elif op == "and":
+            if not value:
+                return value
+            value = _eval(right_node, variables, functions, depth + 1)
+        else:  # "or"
+            if value:
+                return value
+            value = _eval(right_node, variables, functions, depth + 1)
+    return value
+
+
+def _eval_subscripts(
+    node: tuple,
+    variables: Mapping[str, Any],
+    functions: Mapping[str, Callable[..., Any]],
+    depth: int,
+) -> Any:
+    """Evaluate ``x[a][b][c]`` iteratively, for the same reason as ``_eval_chain``."""
+    spine: list[tuple] = []
+    while node[0] == "index":
+        spine.append(node[2])
+        node = node[1]
+    value = _eval(node, variables, functions, depth + 1)
+    for index_node in reversed(spine):
+        value = _subscript(
+            value, _eval(index_node, variables, functions, depth + 1)
+        )
+    return value
+
+
 def _eval(
     node: tuple,
     variables: Mapping[str, Any],
@@ -620,27 +765,10 @@ def _eval(
         return [_eval(item, variables, functions, depth + 1) for item in node[1]]
 
     if kind == "index":
-        target = _eval(node[1], variables, functions, depth + 1)
-        index = _eval(node[2], variables, functions, depth + 1)
-        if isinstance(target, Mapping):
-            try:
-                return target[index]
-            except (KeyError, TypeError):
-                raise EvalError(f"no such key {index!r}") from None
-        if isinstance(target, (list, tuple, str)):
-            if not isinstance(index, int) or isinstance(index, bool):
-                raise EvalError(
-                    f"subscript of {_type_name(target)} must be an integer, "
-                    f"not {_type_name(index)}"
-                )
-            try:
-                return target[index]
-            except IndexError:
-                raise EvalError(
-                    f"index {index} is out of range for a "
-                    f"{_type_name(target)} of length {len(target)}"
-                ) from None
-        raise EvalError(f"{_type_name(target)} cannot be subscripted")
+        return _eval_subscripts(node, variables, functions, depth)
+
+    if kind in ("bin", "bool"):
+        return _eval_chain(node, variables, functions, depth)
 
     if kind == "call":
         name, arg_nodes = node[1], node[2]
@@ -663,22 +791,6 @@ def _eval(
             )
         return -operand if op == "-" else +operand
 
-    if kind == "bin":
-        op = node[1]
-        left = _eval(node[2], variables, functions, depth + 1)
-        right = _eval(node[3], variables, functions, depth + 1)
-        if op == "+":
-            return _add(left, right)
-        if op == "-":
-            return _numeric("-", left, right)
-        if op == "*":
-            if isinstance(left, (str, list)) or isinstance(right, (str, list)):
-                return _repeat("*", left, right)
-            return _numeric("*", left, right)
-        if op in ("/", "//", "%"):
-            return _numeric(op, left, right)
-        return _power(left, right)  # "**"
-
     if kind == "cmp":
         ops, operands = node[1], node[2]
         left = _eval(operands[0], variables, functions, depth + 1)
@@ -688,13 +800,6 @@ def _eval(
                 return False
             left = right
         return True
-
-    if kind == "bool":
-        left = _eval(node[2], variables, functions, depth + 1)
-        if node[1] == "and":
-            # Short-circuit, and return the operand itself, as Python does.
-            return _eval(node[3], variables, functions, depth + 1) if left else left
-        return left if left else _eval(node[3], variables, functions, depth + 1)
 
     if kind == "not":
         return not _eval(node[1], variables, functions, depth + 1)
