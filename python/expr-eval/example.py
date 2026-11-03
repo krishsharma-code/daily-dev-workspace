@@ -72,8 +72,14 @@ def main():
     show("escape attempt", "__import__('os').system('echo hi')", ORDER)
     show("attribute call", "order.get('subtotal')", ORDER)
     show("runaway exponent", "10 ** 100000", ORDER)
+    show("overflowing literal", "1e999 > 0", ORDER)
+    show("oversized repetition", "[1, 2, 3] * 10000", ORDER)
 
-    # 7. A failed evaluation leaves your data alone, and EvalError says why.
+    # 7. A long chain is not deep nesting: it is walked iteratively, so a flat
+    #    200-term sum evaluates instead of tripping the depth guard.
+    print(f"flat 200-term sum: {evaluate(' + '.join(['1'] * 200))}\n")
+
+    # 8. A failed evaluation leaves your data alone, and EvalError says why.
     try:
         evaluate("order.subtotal / 0", ORDER)
     except EvalError as error:
