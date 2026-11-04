@@ -76,7 +76,13 @@ characters of letters, digits, `-` and `_`.
 through older events.
 
 Replay forwards the stored method, body and headers (minus hop-by-hop headers
-such as `host` and `content-length`) and reports what the receiver answered:
+such as `host` and `content-length`) and reports what the receiver answered.
+Redirects are **not** followed: a `302` from the receiver is reported as
+`upstream_status: 302` rather than chased, so the request can only ever reach
+the host you named. Targets must be `http`/`https`, may not carry
+`user:password@` credentials, and may not point at a link-local, unspecified or
+cloud-metadata address (`169.254.0.0/16`, `fe80::/10`, `0.0.0.0/8`,
+`metadata.google.internal`). Loopback targets — the normal case — are allowed.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/events/1/replay \
@@ -90,9 +96,18 @@ curl -X POST http://127.0.0.1:8000/api/events/1/replay \
 - Bodies are stored as bytes. Anything over 256 KB is truncated on capture and
   the event is flagged `truncated`, so one noisy sender cannot bloat the
   database. `body_size` always reports the original size.
+- The reader is bounded on the way in too: at most 256 KB is kept in memory and
+  a further 1 MB is drained (and counted, not stored), so a sender that declares
+  a multi-gigabyte `Content-Length` cannot exhaust memory. A `Content-Length`
+  that is not a non-negative integer is answered with `400` instead of dropping
+  the connection.
 - Bodies that are not valid UTF-8 are returned base64-encoded with
   `"body_encoding": "base64"`, so binary payloads survive the round trip.
-- Header names are lowercased; repeated headers are joined with `, `.
+- Header names are lowercased; repeated headers are joined with `, `. At most
+  100 headers are kept and any single value is cut at 8 KB, because the capture
+  endpoint is unauthenticated and every header it accepts is written to SQLite.
+- Static files are resolved with `realpath` and must stay inside `client/`, so a
+  symlink dropped into that folder cannot serve anything outside it.
 - The list endpoint returns a 200-character `body_preview` instead of the full
   body, which keeps the polling client light.
 
@@ -109,5 +124,11 @@ capture endpoint, the API and static file serving together.
 ## Scope
 
 This is a local development tool. It binds to `127.0.0.1` by default, has no
-authentication, and replay will send a request to whatever URL you type. Do not
-expose it to an untrusted network.
+authentication, and replay will send a request to whatever `http(s)` URL you
+type — minus metadata and link-local addresses, and without following
+redirects. Do not expose it to an untrusted network.
+
+Known limits, stated plainly: replay validates the host *as written*, so a
+domain name that resolves to a link-local address (DNS rebinding) is not
+blocked; and captured headers are stored verbatim, including any
+`authorization` or signature header the sender included.
