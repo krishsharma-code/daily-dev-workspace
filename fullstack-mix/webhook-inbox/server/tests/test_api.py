@@ -5,16 +5,19 @@ socket is involved. One end-to-end test boots a real server to prove the
 wiring (capture endpoint, API and static file serving) works over HTTP.
 """
 
+import io
 import json
+import socket
 import threading
+import urllib.error
 import urllib.request
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 import app as app_module
 from app import make_handler, route_request
-from store import InboxStore
+from store import MAX_BODY_BYTES, InboxStore
 
 
 @pytest.fixture()
@@ -303,3 +306,226 @@ class TestEndToEnd:
             httpd.shutdown()
             httpd.server_close()
             thread.join(timeout=5)
+
+
+def _http(store, path):
+    """Start a throwaway server, issue one GET and return ``(status, body)``."""
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(store))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{httpd.server_address[1]}{path}"
+    try:
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:
+                return response.status, response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+class TestReplayTargetHardening:
+    """Replay takes a URL from the caller, so the target is validated first."""
+
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "http://169.254.169.254/latest/meta-data/",  # link-local metadata
+            "http://[fe80::1]/hook",  # IPv6 link-local
+            "http://0.0.0.0:8000/hook",  # unspecified
+            "http://metadata.google.internal/computeMetadata/v1/",
+            "http://user:secret@localhost:9000/hook",  # embedded credentials
+            "http://localhost:notaport/hook",  # unparseable port
+        ],
+    )
+    def test_replay_rejects_unsafe_targets(self, store, target):
+        event = store.add_event("alpha", "POST", "/in/alpha")
+        status, _, payload = post_json(
+            store, f"/api/events/{event.id}/replay", {"target": target}
+        )
+        assert status == 422
+        assert "http(s)" in payload["error"]
+
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "http://127.0.0.1:3000/hook",
+            "http://localhost:3000/hook",
+            "https://dev.example.test/hook",
+        ],
+    )
+    def test_loopback_targets_still_allowed(self, target):
+        assert app_module._valid_target(target) == target
+
+    def test_hosts_are_matched_case_insensitively(self):
+        assert app_module._valid_target("http://METADATA.GOOGLE.INTERNAL/") is None
+
+
+class TestReplayRedirects:
+    def test_redirect_is_reported_not_followed(self, store):
+        followed = []
+
+        class Target(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 - stdlib naming
+                followed.append(self.path)
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        target = ThreadingHTTPServer(("127.0.0.1", 0), Target)
+
+        class Redirector(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                self.send_response(302)
+                self.send_header(
+                    "Location",
+                    f"http://127.0.0.1:{target.server_address[1]}/followed",
+                )
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        redirector = ThreadingHTTPServer(("127.0.0.1", 0), Redirector)
+        for server in (target, redirector):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            event = store.add_event("alpha", "POST", "/in/alpha", {}, b"{}")
+            url = f"http://127.0.0.1:{redirector.server_address[1]}/hook"
+            status, _ = app_module.send_upstream(event, url)
+            assert status == 302
+            assert followed == []
+        finally:
+            for server in (target, redirector):
+                server.shutdown()
+                server.server_close()
+
+
+class TestRequestFraming:
+    """Content-Length comes from the sender and must never be trusted blindly."""
+
+    @pytest.mark.parametrize("value", ["abc", "-5", "1.5", "0x10", ""])
+    def test_bad_content_length_is_a_400(self, value):
+        length, error = app_module._parse_content_length({"Content-Length": value})
+        assert length == 0
+        if value == "":
+            assert error is None
+        else:
+            assert error[0] == 400
+
+    def test_header_lookup_is_case_insensitive(self):
+        assert app_module._parse_content_length({"content-length": "12"}) == (12, None)
+
+    def test_missing_content_length_is_zero(self):
+        assert app_module._parse_content_length({}) == (0, None)
+
+    def test_read_body_keeps_only_the_cap(self):
+        declared = MAX_BODY_BYTES * 3
+        stored, total = app_module._read_body(io.BytesIO(b"a" * declared), declared)
+        assert len(stored) == MAX_BODY_BYTES
+        assert total == declared
+
+    def test_read_body_stops_draining_at_the_cap(self):
+        declared = app_module.MAX_DRAIN_BYTES * 5
+        payload = b"a" * (app_module.MAX_DRAIN_BYTES * 2)
+        stored, total = app_module._read_body(io.BytesIO(payload), declared)
+        assert len(stored) == MAX_BODY_BYTES
+        assert total == MAX_BODY_BYTES + app_module.MAX_DRAIN_BYTES
+
+    def test_malformed_content_length_gets_a_response(self, store):
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(store))
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with socket.create_connection(
+                ("127.0.0.1", httpd.server_address[1]), timeout=5
+            ) as conn:
+                conn.sendall(
+                    b"POST /in/hooks HTTP/1.1\r\nHost: x\r\nContent-Length: abc\r\n\r\n"
+                )
+                reply = b""
+                while True:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    reply += chunk
+            assert reply.startswith(b"HTTP/1.0 400"), reply[:80]
+            assert b"Content-Length must be an integer" in reply
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+
+class TestCaptureBodyLimits:
+    def test_oversized_capture_reports_true_size(self, store):
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(store))
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        payload = b"z" * (MAX_BODY_BYTES + 1024)
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{httpd.server_address[1]}/in/big",
+                data=payload,
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                assert response.status == 202
+                event_id = json.loads(response.read())["event_id"]
+            event = store.get_event(event_id)
+            assert event.body_size == len(payload)
+            assert event.truncated is True
+            assert len(event.body) == MAX_BODY_BYTES
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+
+class TestStaticContainment:
+    def test_symlink_out_of_client_dir_is_forbidden(self, store, tmp_path, monkeypatch):
+        client = tmp_path / "client"
+        client.mkdir()
+        (client / "index.html").write_text("ok")
+        secret = tmp_path / "secret.txt"
+        secret.write_text("do not serve me")
+        (client / "escape.txt").symlink_to(secret)
+        monkeypatch.setattr(app_module, "CLIENT_DIR", str(client))
+
+        status, _ = _http(store, "/escape.txt")
+        assert status == 403
+
+    def test_normal_file_still_served(self, store, tmp_path, monkeypatch):
+        client = tmp_path / "client"
+        client.mkdir()
+        (client / "index.html").write_text("Webhook Inbox")
+        monkeypatch.setattr(app_module, "CLIENT_DIR", str(client))
+
+        status, body = _http(store, "/")
+        assert status == 200
+        assert body == b"Webhook Inbox"
+
+    def test_traversal_is_forbidden(self, store, tmp_path, monkeypatch):
+        client = tmp_path / "client"
+        client.mkdir()
+        (client / "index.html").write_text("ok")
+        (tmp_path / "secret.txt").write_text("nope")
+        monkeypatch.setattr(app_module, "CLIENT_DIR", str(client))
+
+        status, _ = _http(store, "/../secret.txt")
+        assert status in (403, 404)
+
+    def test_null_byte_in_path_is_rejected(self, store, tmp_path, monkeypatch):
+        client = tmp_path / "client"
+        client.mkdir()
+        (client / "index.html").write_text("ok")
+        monkeypatch.setattr(app_module, "CLIENT_DIR", str(client))
+
+        status, _ = _http(store, "/%00index.html")
+        assert status == 400
