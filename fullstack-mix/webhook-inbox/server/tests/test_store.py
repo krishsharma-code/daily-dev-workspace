@@ -4,6 +4,8 @@ import pytest
 
 from store import (
     MAX_BODY_BYTES,
+    MAX_HEADERS,
+    MAX_HEADER_VALUE,
     Event,
     InboxStore,
     ValidationError,
@@ -205,3 +207,70 @@ class TestPersistence:
             assert events[0].headers["x"] == "1"
         finally:
             second.close()
+
+
+class TestHeaderBounds:
+    """Header volume is sender-controlled, so the store caps it."""
+
+    def test_caps_number_of_headers(self, store):
+        headers = {f"x-h{index}": "v" for index in range(MAX_HEADERS + 20)}
+        event = store.add_event("alpha", "POST", "/in/alpha", headers)
+        assert len(event.headers) == MAX_HEADERS
+
+    def test_truncates_long_header_values(self, store):
+        event = store.add_event(
+            "alpha", "POST", "/in/alpha", {"X-Big": "z" * (MAX_HEADER_VALUE + 50)}
+        )
+        value = event.headers["x-big"]
+        assert value.endswith("...[truncated]")
+        assert len(value) == MAX_HEADER_VALUE + len("...[truncated]")
+
+    def test_keeps_normal_headers_untouched(self, store):
+        event = store.add_event(
+            "alpha", "POST", "/in/alpha", {"Content-Type": "application/json"}
+        )
+        assert event.headers == {"content-type": "application/json"}
+
+
+class TestBodySizeHint:
+    """The HTTP layer may drop the tail of a huge body before storing it."""
+
+    def test_reports_true_size_for_pre_truncated_body(self, store):
+        event = store.add_event(
+            "alpha", "POST", "/in/alpha", {}, b"x" * 10, body_size=5_000_000
+        )
+        assert event.body_size == 5_000_000
+        assert event.truncated is True
+        assert len(event.body) == 10
+
+    def test_never_reports_less_than_stored(self, store):
+        event = store.add_event("alpha", "POST", "/in/alpha", {}, b"x" * 100, body_size=10)
+        assert event.body_size == 100
+        assert event.truncated is False
+
+    def test_rejects_non_integer_hint(self, store):
+        with pytest.raises(ValidationError):
+            store.add_event("alpha", "POST", "/in/alpha", {}, b"x", body_size="lots")
+
+
+class TestGetBin:
+    def test_returns_counts(self, store):
+        store.add_event("alpha", "POST", "/in/alpha")
+        store.add_event("alpha", "POST", "/in/alpha")
+        info = store.get_bin("Alpha")
+        assert info["name"] == "alpha"
+        assert info["events"] == 2
+        assert info["last_received_at"]
+
+    def test_missing_bin_is_none(self, store):
+        assert store.get_bin("ghost") is None
+
+    def test_invalid_name_raises(self, store):
+        with pytest.raises(ValidationError):
+            store.get_bin("bad name")
+
+
+class TestPagingValidation:
+    def test_non_integer_before_id_raises(self, store):
+        with pytest.raises(ValidationError):
+            store.list_events(before_id="nope")

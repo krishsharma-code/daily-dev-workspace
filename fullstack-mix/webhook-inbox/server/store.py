@@ -30,6 +30,8 @@ from typing import Any, Optional
 __all__ = [
     "DEFAULT_LIMIT",
     "MAX_BODY_BYTES",
+    "MAX_HEADERS",
+    "MAX_HEADER_VALUE",
     "MAX_LIMIT",
     "Event",
     "InboxStore",
@@ -40,6 +42,10 @@ __all__ = [
 MAX_BODY_BYTES = 256 * 1024
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
+# A sender controls the headers we are handed, so both the number of headers
+# and the length of each value are bounded before anything reaches SQLite.
+MAX_HEADERS = 100
+MAX_HEADER_VALUE = 8192
 
 # Lowercase letters, digits, dash and underscore; must start with a letter or
 # digit so a bin name is always safe inside a URL path segment.
@@ -92,9 +98,18 @@ def normalise_bin_name(name: Any) -> str:
 
 
 def _normalise_headers(headers: Optional[dict]) -> dict:
-    """Lowercase keys, stringify values, keep the first value for repeats."""
+    """Lowercase keys, stringify values, cap what one request can store.
+
+    Repeated values (a list or tuple) are joined with ``", "``; a repeated key
+    in a plain dict keeps the last value Python kept for it. Names longer than
+    :data:`MAX_HEADERS` are dropped and values longer than
+    :data:`MAX_HEADER_VALUE` are truncated, so an unauthenticated capture
+    endpoint cannot be used to fill memory or the database with one request.
+    """
     cleaned: dict[str, str] = {}
     for key, value in (headers or {}).items():
+        if len(cleaned) >= MAX_HEADERS:
+            break
         if key is None:
             continue
         name = str(key).strip().lower()
@@ -104,6 +119,8 @@ def _normalise_headers(headers: Optional[dict]) -> dict:
             text = ", ".join(str(item) for item in value)
         else:
             text = str(value)
+        if len(text) > MAX_HEADER_VALUE:
+            text = text[:MAX_HEADER_VALUE] + "...[truncated]"
         cleaned[name] = text
     return cleaned
 
@@ -212,11 +229,34 @@ class InboxStore:
         ]
 
     def get_bin(self, name: Any) -> Optional[dict]:
+        """Return one bin with its event count, or ``None`` if it is absent.
+
+        One indexed lookup; the previous version listed every bin and scanned
+        the result, which made this O(bins) for a single row.
+        """
         clean = normalise_bin_name(name)
-        for info in self.list_bins():
-            if info["name"] == clean:
-                return info
-        return None
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT b.name,
+                       b.created_at,
+                       COUNT(e.id) AS events,
+                       MAX(e.received_at) AS last_received_at
+                FROM bins AS b
+                LEFT JOIN events AS e ON e.bin = b.name
+                WHERE b.name = ?
+                GROUP BY b.name, b.created_at
+                """,
+                (clean,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "name": row["name"],
+            "created_at": row["created_at"],
+            "events": row["events"],
+            "last_received_at": row["last_received_at"],
+        }
 
     def delete_bin(self, name: Any) -> bool:
         """Delete a bin and every event inside it."""
@@ -236,13 +276,25 @@ class InboxStore:
         path: str,
         headers: Optional[dict] = None,
         body: bytes = b"",
+        body_size: Optional[int] = None,
     ) -> Event:
-        """Store one captured delivery, creating the bin when it is new."""
+        """Store one captured delivery, creating the bin when it is new.
+
+        ``body`` is truncated to :data:`MAX_BODY_BYTES` and flagged when it
+        overflows. ``body_size`` lets a caller that already dropped part of an
+        oversized payload report the true size; it is never allowed to report
+        less than what is actually stored.
+        """
         clean = normalise_bin_name(bin)
         payload = body or b""
         if isinstance(payload, str):  # defensive: callers should pass bytes
             payload = payload.encode("utf-8")
         size = len(payload)
+        if body_size is not None:
+            try:
+                size = max(size, int(body_size))
+            except (TypeError, ValueError):
+                raise ValidationError("body_size must be an integer") from None
         truncated = size > MAX_BODY_BYTES
         stored = payload[:MAX_BODY_BYTES]
         method = (method or "GET").upper()
@@ -297,8 +349,14 @@ class InboxStore:
             clauses.append("bin = ?")
             params.append(normalise_bin_name(bin))
         if before_id is not None:
+            try:
+                cursor_id = int(before_id)
+            except (TypeError, ValueError):
+                # A caller-supplied cursor must not surface as a 500 from
+                # whoever is driving this store.
+                raise ValidationError("before_id must be an integer") from None
             clauses.append("id < ?")
-            params.append(int(before_id))
+            params.append(cursor_id)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY id DESC LIMIT ?"
@@ -351,7 +409,12 @@ class InboxStore:
 
 
 def _row_to_event(row: sqlite3.Row) -> Event:
-    raw_headers = json.loads(row["headers"]) if row["headers"] else {}
+    try:
+        raw_headers = json.loads(row["headers"]) if row["headers"] else {}
+    except (TypeError, ValueError):  # a damaged row must not break the listing
+        raw_headers = {}
+    if not isinstance(raw_headers, dict):
+        raw_headers = {}
     body = row["body"] or b""
     if isinstance(body, str):  # pragma: no cover - sqlite3 always returns bytes
         body = body.encode("utf-8")
