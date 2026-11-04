@@ -4,6 +4,7 @@ Pure Python work: scripts, packages, tests, and middleware.
 
 ## Modules
 
+- [`backoff-planner/`](backoff-planner/) — deadline-aware retry scheduling: capped exponential backoff, jitter, `Retry-After`
 - [`cron-schedule/`](cron-schedule/) — parse five-field cron expressions and compute upcoming fire times
 - [`data-cleaner/`](data-cleaner/) — clean and normalise tabular records
 - [`dep-graph/`](dep-graph/) — deterministic dependency graph: ordering, layers, cycles, impact
