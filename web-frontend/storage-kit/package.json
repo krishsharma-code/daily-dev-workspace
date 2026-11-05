@@ -1,0 +1,11 @@
+{
+  "name": "storage-kit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Namespaced, TTL-aware wrapper over any Web Storage backend, with lazy expiry and quota recovery.",
+  "main": "storage-kit.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}

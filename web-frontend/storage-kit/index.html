@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>storage-kit — namespaced TTL store for Web Storage</title>
+    <link rel="stylesheet" href="storage-kit.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <h1>storage-kit</h1>
+      <p class="lede">
+        A namespaced, TTL-aware wrapper over <code>localStorage</code>. Entries carry their own
+        expiry, unreadable payloads are discarded on read, and <code>clear()</code> only touches
+        this store's namespace.
+      </p>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>Write an entry</h2>
+        <div class="form-grid">
+          <label>
+            Key
+            <input id="key-input" type="text" value="greeting" autocomplete="off" spellcheck="false" />
+          </label>
+          <label>
+            Value <span class="hint">(JSON is parsed, anything else is stored as a string)</span>
+            <input id="value-input" type="text" value='{"from":"storage-kit","ok":true}' spellcheck="false" />
+          </label>
+          <label>
+            TTL
+            <select id="ttl-select">
+              <option value="null">never expires</option>
+              <option value="5000">5 seconds</option>
+              <option value="30000" selected>30 seconds</option>
+              <option value="300000">5 minutes</option>
+              <option value="3600000">1 hour</option>
+            </select>
+          </label>
+          <div class="actions">
+            <button id="set-button" type="button" class="primary">Set</button>
+            <button id="get-button" type="button">Get</button>
+            <button id="delete-button" type="button">Delete</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Live entries in <code id="namespace-label">demo</code></h2>
+          <div class="actions">
+            <button id="sweep-button" type="button">Sweep expired</button>
+            <button id="clear-button" type="button" class="danger">Clear namespace</button>
+          </div>
+        </div>
+        <p class="meta">
+          <span id="size-label">0 entries</span>
+          <span class="dot">·</span>
+          <span>neighbour namespace <code>demo-neighbour</code> holds
+            <strong id="neighbour-label">nothing</strong> —
+            <button id="neighbour-button" type="button" class="link">write to it</button>
+          </span>
+        </p>
+        <table class="entries">
+          <thead>
+            <tr>
+              <th scope="col">Key</th>
+              <th scope="col">Value</th>
+              <th scope="col">Expires</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="entries-body">
+            <tr class="empty-row">
+              <td colspan="4">Nothing stored yet — write an entry above.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Log</h2>
+          <button id="log-clear-button" type="button" class="link">clear log</button>
+        </div>
+        <ol id="log" class="log" reversed></ol>
+      </section>
+    </main>
+
+    <script type="module">
+      import { createStore, QuotaExceededError } from "./storage-kit.js";
+
+      const store = createStore({ namespace: "demo", defaultTTL: 30_000 });
+      const neighbour = createStore({ namespace: "demo-neighbour" });
+
+      const keyInput = document.getElementById("key-input");
+      const valueInput = document.getElementById("value-input");
+      const ttlSelect = document.getElementById("ttl-select");
+      const entriesBody = document.getElementById("entries-body");
+      const sizeLabel = document.getElementById("size-label");
+      const neighbourLabel = document.getElementById("neighbour-label");
+      const namespaceLabel = document.getElementById("namespace-label");
+      const logList = document.getElementById("log");
+
+      namespaceLabel.textContent = store.namespace;
+
+      function log(message, tone = "info") {
+        const item = document.createElement("li");
+        item.className = `log-entry log-${tone}`;
+        const time = new Date().toLocaleTimeString([], { hour12: false });
+        item.textContent = `${time}  ${message}`;
+        logList.prepend(item);
+        while (logList.children.length > 40) logList.lastElementChild.remove();
+      }
+
+      function describe(value) {
+        return JSON.stringify(value) ?? String(value);
+      }
+
+      function preview(value) {
+        const text = describe(value);
+        return text.length > 60 ? `${text.slice(0, 57)}…` : text;
+      }
+
+      function formatRemaining(expiresAt) {
+        if (expiresAt === null) return "never";
+        const left = expiresAt - Date.now();
+        if (left <= 0) return "expired";
+        if (left < 60_000) return `${Math.ceil(left / 1000)}s`;
+        return `${Math.round(left / 60_000)} min`;
+      }
+
+      function readInput() {
+        const raw = valueInput.value;
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return raw;
+        }
+      }
+
+      function readTTL() {
+        const raw = ttlSelect.value;
+        return raw === "null" ? null : Number(raw);
+      }
+
+      function render() {
+        const keys = store.keys();
+        entriesBody.replaceChildren();
+        sizeLabel.textContent = `${keys.length} ${keys.length === 1 ? "entry" : "entries"}`;
+
+        if (keys.length === 0) {
+          const row = document.createElement("tr");
+          row.className = "empty-row";
+          const cell = document.createElement("td");
+          cell.colSpan = 4;
+          cell.textContent = "Nothing stored yet — write an entry above.";
+          row.append(cell);
+          entriesBody.append(row);
+        }
+
+        for (const key of keys) {
+          const row = document.createElement("tr");
+
+          const keyCell = document.createElement("td");
+          keyCell.className = "mono";
+          keyCell.textContent = key;
+
+          const valueCell = document.createElement("td");
+          valueCell.className = "mono value-cell";
+          valueCell.textContent = preview(store.get(key));
+          valueCell.title = describe(store.get(key));
+
+          const expiryCell = document.createElement("td");
+          expiryCell.textContent = formatRemaining(store.expiresAt(key));
+          if (store.expiresAt(key) === null) expiryCell.className = "muted";
+
+          const actionCell = document.createElement("td");
+          actionCell.className = "row-actions";
+          for (const [label, handler] of [
+            [
+              "raw",
+              () => log(`raw["${store.namespace}:${key}"] = ${localStorage.getItem(`${store.namespace}:${key}`)}`, "muted"),
+            ],
+            ["delete", () => {
+              store.delete(key);
+              log(`deleted "${key}"`, "warn");
+              render();
+            }],
+          ]) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "link";
+            button.textContent = label;
+            button.addEventListener("click", handler);
+            actionCell.append(button);
+          }
+
+          row.append(keyCell, valueCell, expiryCell, actionCell);
+          entriesBody.append(row);
+        }
+
+        const neighbourKeys = neighbour.keys();
+        neighbourLabel.textContent = neighbourKeys.length
+          ? `${neighbourKeys.length} ${neighbourKeys.length === 1 ? "entry" : "entries"}`
+          : "nothing";
+      }
+
+      document.getElementById("set-button").addEventListener("click", () => {
+        const key = keyInput.value.trim();
+        const value = readInput();
+        const ttl = readTTL();
+        try {
+          store.set(key, value, { ttl });
+          log(`set "${key}" = ${preview(value)} (ttl ${ttl === null ? "none" : `${ttl} ms`})`, "ok");
+        } catch (error) {
+          if (error instanceof QuotaExceededError) {
+            log(`could not write "${key}": quota exhausted`, "error");
+          } else {
+            log(`${error.name}: ${error.message}`, "error");
+          }
+        }
+        render();
+      });
+
+      document.getElementById("get-button").addEventListener("click", () => {
+        const key = keyInput.value.trim();
+        const value = store.get(key, undefined);
+        log(value === undefined ? `"${key}" is not stored` : `get "${key}" → ${describe(value)}`, value === undefined ? "warn" : "ok");
+        render();
+      });
+
+      document.getElementById("delete-button").addEventListener("click", () => {
+        const key = keyInput.value.trim();
+        store.delete(key);
+        log(`deleted "${key}"`, "warn");
+        render();
+      });
+
+      document.getElementById("sweep-button").addEventListener("click", () => {
+        const removed = store.sweep();
+        log(`swept ${removed} expired ${removed === 1 ? "entry" : "entries"}`, "muted");
+        render();
+      });
+
+      document.getElementById("clear-button").addEventListener("click", () => {
+        const removed = store.clear();
+        log(`cleared ${removed} ${removed === 1 ? "entry" : "entries"} from "${store.namespace}"`, "warn");
+        render();
+      });
+
+      document.getElementById("neighbour-button").addEventListener("click", () => {
+        const next = (neighbour.get("counter") ?? 0) + 1;
+        neighbour.set("counter", next, { ttl: null });
+        log(`wrote demo-neighbour:counter = ${next} (clear() in "demo" leaves it alone)`, "ok");
+        render();
+      });
+
+      document.getElementById("log-clear-button").addEventListener("click", () => {
+        logList.replaceChildren();
+      });
+
+      log("store ready — namespace \"demo\", default TTL 30s", "muted");
+      render();
+      setInterval(render, 1000);
+    </script>
+  </body>
+</html>
