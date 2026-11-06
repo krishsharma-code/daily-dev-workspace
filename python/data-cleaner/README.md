@@ -28,7 +28,8 @@ python/data-cleaner/
 ├── example.py                # runnable demo
 ├── conftest.py               # makes the module importable in tests
 └── tests/
-    └── test_datacleaner.py
+    ├── test_datacleaner.py   # the public API, value by value
+    └── test_robustness.py    # regression tests for the edge cases below
 ```
 
 ## Run the demo
@@ -74,5 +75,44 @@ every field ended up empty.
 - `to_number` treats "not finite" as "not a number": `nan`/`inf` (as values or as
   strings such as `"inf"` or an overflow like `"1e400"`) coerce to `None`, so a
   single bad cell can't poison a downstream sum or average.
+- `to_number` also checks the *shape* of a string before coercing it. A currency
+  symbol is accepted only at the front and a thousands separator only between
+  groups of three, so `"1,234"`, `"1 234"`, `"₹1,200"` and `".5"` all parse,
+  while `"12$34"`, `"1,2,3"`, `"4 5 6"` and `"1_000"` return `None` instead of
+  quietly becoming a different number.
+- `is_missing` treats a non-finite float (`nan`, `inf`) as missing, matching
+  `to_number`, so `clean_record` and `missing_required` agree about a cell.
+  Custom `missing_tokens` are normalised the same way the value is, so
+  `missing_tokens={"N/A"}` matches `"n/a"`.
 - `dedupe_records` compares whole records order-independently and never raises on
-  mixed-type or non-comparable keys; it keys nested structures by `str(key)`.
+  mixed-type or non-comparable keys; it keys nested structures by `str(key)` and
+  compares sets by membership, not by iteration order. It holds one frozen key
+  per distinct record, so memory is O(distinct records).
+
+## Argument errors vs bad data
+
+Bad *data* never raises: an unparseable number, email or phone number comes back
+as `None`. A bad *argument* does raise, because it is a bug in the caller rather
+than a property of the data:
+
+| Call | Result |
+| --- | --- |
+| `normalize_phone(x, country_code="999999")` | `ValueError` — a country code is 1–3 digits (E.164) |
+| `normalize_phone(x, country_code="abc")` | `ValueError` |
+| `clean_record(r, transformers={"phone": "oops"})` | `TypeError`, naming the field |
+| `normalize_phone("12345")` | `None` — bad data |
+| `to_number("12$34")` | `None` — bad data |
+
+An exception raised *inside* a transformer propagates out of `clean_record`:
+a pipeline should stop on a broken transformer rather than write half-cleaned
+rows.
+
+## Known limitations
+
+- `normalize_phone` implements the Indian numbering plan only (a 10-digit
+  national number, optional trunk `0`, optional country-code prefix). Plans that
+  keep a significant leading zero in the national number, such as Italy's, are
+  not supported: the trunk `0` and a significant `0` are indistinguishable
+  without a numbering-plan database.
+- `normalize_email` is a shape check (one `@`, a dotted domain), not an RFC 5322
+  parser.
