@@ -43,6 +43,18 @@ Pruning is amortised `O(1)` per admission — each timestamp is appended once an
 popped once — but a single `allow()` call may pop up to `limit` expired entries,
 so one call costs `O(limit)` in the worst case.
 
+`RateLimitExceeded` exposes the same facts as numbers, not only as prose:
+`retry_after` is the wait the call would have needed and `requested` is the
+token count asked for, so a handler can set a header without parsing the
+message. Both are `None` when the exception is constructed by hand.
+
+`acquire()` waits by calling `sleep` and re-reading `clock`. If the injected
+clock never advances — a frozen fake clock, or a real clock coarser than the
+wait — the loop cannot make progress, so after 5 consecutive sleeps that leave
+the clock unchanged it raises `RuntimeError` instead of spinning forever. A
+caller-supplied clock is the caller's contract; a frozen one is a bug worth
+failing loudly.
+
 ## Validation
 
 Invalid arguments raise `ValueError`:
@@ -55,6 +67,12 @@ Invalid arguments raise `ValueError`:
   of blowing up inside the counter;
 - text values such as `"100"`, which are refused rather than coerced: parse
   environment variables and config yourself, where the failure is obvious;
+- `bool` values, even though Python treats them as integers — `capacity=True`
+  would otherwise quietly mean one token, and a `limit` bound to a feature flag
+  would silently become 1;
+- integers too large to represent as a `float` (`10 ** 400`), which are reported
+  as non-finite `ValueError`s rather than letting `OverflowError` escape, so the
+  single-`except ValueError` contract below holds for every input;
 - a `timeout` that is negative or non-finite (`inf` is not a stand-in for
   `None`). A `nan` timeout is the dangerous one — every comparison against it is
   false, so a naive `timeout < 0` check lets it through and the call blocks

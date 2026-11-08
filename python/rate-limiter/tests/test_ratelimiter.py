@@ -457,3 +457,150 @@ class TestRetryAfter:
         limiter.allow(1)
         limiter.retry_after(1)
         assert limiter.remaining() == 1
+
+
+class TestBooleanIsNotANumber:
+    """``bool`` is an ``int`` subclass; it must not pass as 1 or 0.
+
+    ``limit`` and ``capacity`` are routinely fed from configuration, and a
+    feature flag or a ``KEY in env`` expression evaluates to ``bool``. Accepting
+    it silently shrinks a budget to a single slot.
+    """
+
+    def test_bool_capacity_rejected(self, clock):
+        with pytest.raises(ValueError, match="not bool"):
+            TokenBucket(capacity=True, refill_rate=1.0, clock=clock)
+
+    def test_bool_refill_rate_rejected(self, clock):
+        with pytest.raises(ValueError, match="not bool"):
+            TokenBucket(capacity=1.0, refill_rate=False, clock=clock)
+
+    def test_bool_limit_rejected(self, clock):
+        with pytest.raises(ValueError, match="not bool"):
+            SlidingWindowCounter(limit=True, window=1.0, clock=clock)
+
+    def test_bool_window_rejected(self, clock):
+        with pytest.raises(ValueError, match="not bool"):
+            SlidingWindowCounter(limit=1, window=True, clock=clock)
+
+    def test_bool_tokens_does_not_consume(self, clock):
+        bucket = make_bucket(clock, capacity=5)
+        with pytest.raises(ValueError, match="not bool"):
+            bucket.try_acquire(True)
+        assert bucket.tokens == 5
+
+    def test_bool_allow_tokens_does_not_record(self, clock):
+        limiter = SlidingWindowCounter(limit=3, window=1.0, clock=clock)
+        with pytest.raises(ValueError, match="not bool"):
+            limiter.allow(True)
+        assert limiter.remaining() == 3
+
+    @pytest.mark.parametrize("bad", [True, False])
+    def test_bool_timeout_rejected(self, clock, bad):
+        bucket = make_bucket(clock)
+        with pytest.raises(ValueError, match="timeout"):
+            bucket.acquire(timeout=bad)
+
+
+class TestHugeIntegersAreRejectedAsValueError:
+    """``float(10 ** 400)`` raises ``OverflowError``; it must not escape.
+
+    The module promises that every rejection is a ``ValueError`` so callers can
+    validate untrusted configuration with one ``except``. ``OverflowError`` is
+    not a ``ValueError`` subclass, so a huge integer used to break that promise.
+    """
+
+    def test_bucket_capacity_and_refill_rejected(self, clock):
+        with pytest.raises(ValueError, match="finite"):
+            TokenBucket(capacity=10**400, refill_rate=1.0, clock=clock)
+        with pytest.raises(ValueError, match="finite"):
+            TokenBucket(capacity=1.0, refill_rate=10**400, clock=clock)
+
+    def test_counter_limit_and_window_rejected(self, clock):
+        with pytest.raises(ValueError, match="finite"):
+            SlidingWindowCounter(limit=10**400, window=1.0, clock=clock)
+        with pytest.raises(ValueError, match="finite"):
+            SlidingWindowCounter(limit=1, window=10**400, clock=clock)
+
+    def test_timeout_rejected_without_consuming_tokens(self, clock):
+        bucket = make_bucket(clock, capacity=2)
+        with pytest.raises(ValueError, match="timeout"):
+            bucket.acquire(timeout=10**400)
+        assert bucket.tokens == 2
+
+    @pytest.mark.parametrize("bad", [10**400, -(10**400)])
+    def test_one_except_value_error_covers_it(self, clock, bad):
+        for build in (
+            lambda: TokenBucket(capacity=bad, refill_rate=1.0, clock=clock),
+            lambda: SlidingWindowCounter(limit=1, window=bad, clock=clock),
+        ):
+            with pytest.raises(ValueError):
+                build()
+
+
+class TestRateLimitExceededCarriesNumbers:
+    """Handlers should not have to parse prose to set ``Retry-After``."""
+
+    def test_retry_after_matches_the_computed_wait(self, clock):
+        bucket = make_bucket(clock, capacity=1, refill_rate=2.0)
+        bucket.try_acquire(1)
+        expected = bucket.time_until_available(1)
+        with pytest.raises(RateLimitExceeded) as excinfo:
+            bucket.acquire(tokens=1, timeout=0.0)
+        assert excinfo.value.retry_after == pytest.approx(expected)
+        assert excinfo.value.requested == 1
+
+    def test_message_still_reads_as_prose(self, clock):
+        bucket = make_bucket(clock, capacity=1, refill_rate=1.0)
+        bucket.try_acquire(1)
+        with pytest.raises(RateLimitExceeded, match="exceeding timeout"):
+            bucket.acquire(timeout=0.1)
+
+    def test_direct_construction_still_works(self):
+        exc = RateLimitExceeded("boom")
+        assert str(exc) == "boom"
+        assert exc.retry_after is None
+        assert exc.requested is None
+
+    def test_header_can_be_built_from_the_attribute(self, clock):
+        import math
+
+        bucket = make_bucket(clock, capacity=1, refill_rate=0.5)
+        bucket.try_acquire(1)
+        with pytest.raises(RateLimitExceeded) as excinfo:
+            bucket.acquire(timeout=0.0)
+        assert math.ceil(excinfo.value.retry_after) == 2
+
+
+class TestAcquireRequiresClockProgress:
+    """A frozen clock used to make ``acquire`` sleep forever, silently."""
+
+    class FrozenClock:
+        """Never advances, no matter how often it is slept on."""
+
+        def __init__(self):
+            self.sleeps = 0
+
+        def __call__(self):
+            return 100.0
+
+        def sleep(self, seconds):
+            self.sleeps += 1
+
+    def test_frozen_clock_raises_instead_of_spinning(self):
+        frozen = self.FrozenClock()
+        bucket = TokenBucket(
+            capacity=1.0,
+            refill_rate=1.0,
+            clock=frozen,
+            sleep=frozen.sleep,
+            start_full=False,
+        )
+        with pytest.raises(RuntimeError, match="clock did not advance"):
+            bucket.acquire()
+        assert frozen.sleeps == 5
+
+    def test_advancing_clock_still_waits_normally(self, clock):
+        bucket = make_bucket(clock, capacity=1, refill_rate=1.0)
+        bucket.try_acquire(1)
+        assert bucket.acquire() == pytest.approx(1.0)
