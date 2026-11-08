@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>duration-kit — ISO 8601 durations in the browser</title>
+    <link rel="stylesheet" href="duration-kit.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <h1>duration-kit</h1>
+      <p>
+        Type an ISO 8601 duration. Everything below is computed live by
+        <code>duration-kit.js</code>: the parsed units, the canonical form, a
+        human reading, the approximate millisecond span, and the instant you get
+        when you add it to a date — months and years walked on the real calendar.
+      </p>
+    </header>
+
+    <main>
+      <section class="panel">
+        <label class="field">
+          <span>Duration</span>
+          <input
+            id="input"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            value="P1Y2M3DT4H5M6S"
+            aria-describedby="hint"
+          />
+        </label>
+        <p class="hint" id="hint">
+          <code>P</code> years <code>Y</code> months <code>M</code> days
+          <code>D</code> <code>T</code> hours <code>H</code> minutes
+          <code>M</code> seconds <code>S</code> · weeks (<code>W</code>) stand alone
+        </p>
+
+        <div class="chips" id="chips">
+          <button type="button" data-value="PT30M">PT30M</button>
+          <button type="button" data-value="P1M">P1M</button>
+          <button type="button" data-value="P1W">P1W</button>
+          <button type="button" data-value="PT1.5H">PT1.5H</button>
+          <button type="button" data-value="-P2DT6H">-P2DT6H</button>
+          <button type="button" data-value="P0.5Y">P0.5Y</button>
+          <button type="button" data-value="P1W2D">P1W2D (invalid)</button>
+        </div>
+
+        <div class="controls">
+          <label class="field">
+            <span>Human style</span>
+            <select id="style">
+              <option value="long" selected>long — 2 hours, 30 minutes</option>
+              <option value="short">short — 2 hrs 30 mins</option>
+              <option value="narrow">narrow — 2h 30m</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Units to show</span>
+            <select id="maxUnits">
+              <option value="0" selected>all</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Add to (UTC)</span>
+            <input id="base" type="datetime-local" step="1" value="2024-01-31T23:30:00" />
+          </label>
+        </div>
+
+        <p class="error" id="error" hidden></p>
+      </section>
+
+      <section class="panel" id="results">
+        <h2>Result</h2>
+        <dl class="facts">
+          <div><dt>Canonical</dt><dd><code id="canonical">—</code></dd></div>
+          <div><dt>Human</dt><dd id="human">—</dd></div>
+          <div><dt>Approx. ms</dt><dd><code id="millis">—</code></dd></div>
+          <div><dt>Added to date</dt><dd><code id="added">—</code></dd></div>
+        </dl>
+
+        <h2>Units</h2>
+        <table class="units">
+          <thead>
+            <tr><th scope="col">Unit</th><th scope="col">Value</th></tr>
+          </thead>
+          <tbody id="units"></tbody>
+        </table>
+
+        <p class="note">
+          Years and months have no fixed length, so the millisecond figure uses
+          mean Gregorian lengths (365.2425 days a year). The date arithmetic above
+          walks the calendar in UTC instead, which is why
+          <code>2024-01-31 + P1M</code> lands on 29 February.
+        </p>
+      </section>
+    </main>
+
+    <script type="module">
+      import {
+        parseDuration,
+        formatDuration,
+        humanizeDuration,
+        toMilliseconds,
+        addDuration,
+      } from "./duration-kit.js";
+
+      const input = document.getElementById("input");
+      const style = document.getElementById("style");
+      const maxUnits = document.getElementById("maxUnits");
+      const base = document.getElementById("base");
+      const error = document.getElementById("error");
+      const canonical = document.getElementById("canonical");
+      const human = document.getElementById("human");
+      const millis = document.getElementById("millis");
+      const added = document.getElementById("added");
+      const unitsBody = document.getElementById("units");
+
+      const UNITS = ["years", "months", "weeks", "days", "hours", "minutes", "seconds"];
+
+      function readBase() {
+        if (!base.value) return new Date();
+        const parsed = new Date(`${base.value}Z`);
+        return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+      }
+
+      function render() {
+        unitsBody.replaceChildren();
+        let duration;
+        try {
+          duration = parseDuration(input.value);
+        } catch (problem) {
+          error.hidden = false;
+          error.textContent = problem.message;
+          for (const node of [canonical, human, millis, added]) node.textContent = "—";
+          input.setAttribute("aria-invalid", "true");
+          return;
+        }
+
+        error.hidden = true;
+        input.removeAttribute("aria-invalid");
+
+        const limit = Number(maxUnits.value);
+        canonical.textContent = formatDuration(duration);
+        human.textContent = humanizeDuration(duration, {
+          style: style.value,
+          maxUnits: limit > 0 ? limit : Infinity,
+        });
+        millis.textContent = toMilliseconds(duration).toLocaleString("en-IN");
+        added.textContent = `${addDuration(readBase(), duration).toISOString()} (+${duration.sign === -1 ? "negative" : "positive"})`;
+
+        for (const unit of UNITS) {
+          const row = document.createElement("tr");
+          const name = document.createElement("th");
+          name.scope = "row";
+          name.textContent = unit;
+          const value = document.createElement("td");
+          value.textContent = String(duration[unit]);
+          if (duration[unit] === 0) row.classList.add("zero");
+          row.append(name, value);
+          unitsBody.append(row);
+        }
+      }
+
+      input.addEventListener("input", render);
+      style.addEventListener("change", render);
+      maxUnits.addEventListener("change", render);
+      base.addEventListener("input", render);
+
+      document.getElementById("chips").addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-value]");
+        if (!button) return;
+        input.value = button.dataset.value;
+        render();
+      });
+
+      render();
+    </script>
+  </body>
+</html>

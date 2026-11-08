@@ -1,0 +1,11 @@
+{
+  "name": "duration-kit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ISO 8601 durations: strict parser, canonical formatter, humanised labels and calendar-aware date arithmetic.",
+  "main": "duration-kit.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}
