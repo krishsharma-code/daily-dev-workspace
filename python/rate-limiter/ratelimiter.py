@@ -38,6 +38,23 @@ single ``except ValueError``. Text values (``str``/``bytes``) are rejected
 rather than coerced: reading ``LIMIT=100`` from the environment is the caller's
 job, and implicit coercion hides the mistake until traffic arrives.
 
+``bool`` is refused too, even though Python treats it as an ``int``: a
+``limit`` accidentally bound to a feature flag would otherwise quietly mean
+``1``. Integers too large to represent as a ``float`` (``10 ** 400``) are
+reported as a non-finite :class:`ValueError` rather than letting
+:class:`OverflowError` escape, so the single-``except`` contract holds for
+every input rather than only for the tidy ones.
+
+Blocking and clock progress
+---------------------------
+:meth:`TokenBucket.acquire` waits by calling ``sleep`` and then re-reading
+``clock``. If the injected clock never advances -- a frozen fake clock, or a
+real clock whose resolution is coarser than the wait -- the loop can never
+make progress, so after :data:`_MAX_STALLED_WAITS` consecutive sleeps that
+leave the clock unchanged it raises :class:`RuntimeError` rather than spinning
+forever. This is a caller bug in the injected clock, not bad request data,
+hence the different exception type.
+
 Window semantics
 ----------------
 :class:`SlidingWindowCounter` uses a half-open window ``(now - window, now]``:
@@ -81,29 +98,78 @@ __all__ = [
     "SlidingWindowCounter",
 ]
 
+# Consecutive ``acquire`` sleeps after which a clock that has not moved at all
+# is treated as broken rather than merely coarse. Five leaves room for a clock
+# with sub-second resolution while still failing in milliseconds on a frozen
+# fake clock. See ``TokenBucket.acquire``.
+_MAX_STALLED_WAITS = 5
 
-def _require_number(name: str, value: float) -> float:
-    """Return ``value`` as a finite, positive ``float``.
 
-    Raises :class:`ValueError` for text input, non-numeric input, ``nan``,
-    ``inf`` and non-positive values. Centralising the checks keeps the error
-    wording identical across both limiters and guarantees no ``TypeError``
-    escapes from a bare comparison against caller-supplied data.
+def _as_finite_float(name: str, value: float) -> float:
+    """Coerce ``value`` to a finite ``float`` or raise :class:`ValueError`.
+
+    The single place where caller-supplied numbers cross the trust boundary,
+    so the rejection wording is identical for every parameter of both
+    limiters. Refuses:
+
+    - text (``str``/``bytes``/``bytearray``), rather than coercing it;
+    - ``bool``, which is an ``int`` subclass and would otherwise pass as 1/0;
+    - anything ``float()`` rejects with ``TypeError``/``ValueError``;
+    - integers too large for a ``float`` (``OverflowError``), reported as
+      non-finite so that no exception other than ``ValueError`` escapes;
+    - ``nan`` and ``inf``.
     """
     if isinstance(value, (str, bytes, bytearray)):
         # ``float("100")`` would succeed here; refusing text keeps the trust
         # boundary explicit and pushes env/config parsing to the caller.
         raise ValueError(f"{name} must be a number, not {type(value).__name__}")
+    if isinstance(value, bool):
+        # ``bool`` is an ``int`` subclass, so ``float(True)`` is ``1.0`` and a
+        # ``limit`` bound to a feature flag would silently become 1.
+        raise ValueError(f"{name} must be a number, not bool")
     try:
         number = float(value)
     except (TypeError, ValueError):
         raise ValueError(
             f"{name} must be a number, got {type(value).__name__}"
         ) from None
+    except OverflowError:
+        # ``float(10 ** 400)`` overflows. An integer too large for a float is
+        # not finite as far as a limiter is concerned, and letting
+        # ``OverflowError`` through would break the documented promise that
+        # every rejection is a ``ValueError``.
+        raise ValueError(f"{name} must be a finite number, got {value!r}") from None
     if not math.isfinite(number):
         raise ValueError(f"{name} must be a finite number, got {number!r}")
+    return number
+
+
+def _require_number(name: str, value: float) -> float:
+    """Return ``value`` as a finite, positive ``float``.
+
+    Raises :class:`ValueError` for text input, ``bool``, non-numeric input,
+    ``nan``, ``inf``, float-overflowing integers and non-positive values.
+    Centralising the checks keeps the error wording identical across both
+    limiters and guarantees no ``TypeError`` escapes from a bare comparison
+    against caller-supplied data.
+    """
+    number = _as_finite_float(name, value)
     if number <= 0:
         raise ValueError(f"{name} must be > 0, got {number!r}")
+    return number
+
+
+def _require_non_negative_number(name: str, value: float) -> float:
+    """Return ``value`` as a finite ``float`` that is ``>= 0``.
+
+    Identical to :func:`_require_number` except that zero is legal, which is
+    what a ``timeout`` of ``0`` means ("do not wait at all"). Sharing
+    :func:`_as_finite_float` keeps the two ladders from drifting apart -- the
+    previous inline copy missed ``bool`` and ``OverflowError``.
+    """
+    number = _as_finite_float(name, value)
+    if number < 0:
+        raise ValueError(f"{name} must be >= 0, got {number!r}")
     return number
 
 
@@ -123,7 +189,36 @@ def _validate_request(tokens: float, upper: float, too_large: str) -> None:
 
 
 class RateLimitExceeded(Exception):
-    """Raised when a blocking :meth:`TokenBucket.acquire` cannot proceed in time."""
+    """Raised when a blocking :meth:`TokenBucket.acquire` cannot proceed in time.
+
+    The message is human-readable, but the same facts are also available as
+    numbers so a web handler never has to parse prose to set a header::
+
+        try:
+            bucket.acquire(tokens=1, timeout=0.5)
+        except RateLimitExceeded as exc:
+            headers["Retry-After"] = str(math.ceil(exc.retry_after or 0))
+            return 429, headers
+
+    Attributes
+    ----------
+    retry_after:
+        Seconds the call would have needed to wait, or ``None`` when the
+        exception was constructed directly.
+    requested:
+        Number of tokens asked for, or ``None`` when constructed directly.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        retry_after: Optional[float] = None,
+        requested: Optional[float] = None,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.requested = requested
 
 
 class TokenBucket:
@@ -228,6 +323,12 @@ class TokenBucket:
 
         Arguments are validated up front, so a bad ``tokens`` or ``timeout``
         raises before anything is consumed or any time is spent waiting.
+
+        The exception carries the numeric wait as ``retry_after`` (and the
+        token count as ``requested``) for callers that need to set a
+        ``Retry-After`` header. If the injected ``clock`` never advances the
+        loop cannot progress, so :class:`RuntimeError` is raised after
+        :data:`_MAX_STALLED_WAITS` fruitless sleeps rather than spinning.
         """
         # Validate through the shared helper rather than a bare
         # ``tokens > self.capacity`` comparison: that comparison lets ``nan``
@@ -235,32 +336,41 @@ class TokenBucket:
         # for non-numeric input.
         self._validate_tokens(tokens, self.capacity)
         if timeout is not None:
-            if isinstance(timeout, (str, bytes, bytearray)):
-                raise ValueError("timeout must be a number or None")
-            try:
-                timeout = float(timeout)
-            except (TypeError, ValueError):
-                raise ValueError(
-                    f"timeout must be a number or None, got {type(timeout).__name__}"
-                ) from None
-            if not math.isfinite(timeout):
-                raise ValueError(
-                    f"timeout must be a finite number or None, got {timeout!r}"
-                )
-            if timeout < 0:
-                raise ValueError(f"timeout must be >= 0 or None, got {timeout!r}")
+            # ``None`` means "wait forever"; every other value goes through the
+            # same ladder as the rest of the numbers, so ``timeout="1"``,
+            # ``timeout=nan``, ``timeout=True`` and ``timeout=10 ** 400`` are
+            # all rejected before a token is consumed or a second spent.
+            timeout = _require_non_negative_number("timeout", timeout)
 
         start = self._clock()
         deadline = None if timeout is None else start + timeout
+        stalled = 0
         while True:
             if self.try_acquire(tokens):
                 return self._clock() - start
             wait = self.time_until_available(tokens)
             if deadline is not None and self._clock() + wait > deadline:
                 raise RateLimitExceeded(
-                    f"would need to wait {wait:.3f}s, exceeding timeout {timeout}s"
+                    f"would need to wait {wait:.3f}s, exceeding timeout {timeout}s",
+                    retry_after=wait,
+                    requested=tokens,
                 )
+            before = self._clock()
             self._sleep(wait)
+            if self._clock() <= before:
+                # The clock did not move across the sleep, so the next pass
+                # would compute the same ``wait`` and sleep again -- forever on
+                # a frozen clock. Give up loudly instead of hanging.
+                stalled += 1
+                if stalled >= _MAX_STALLED_WAITS:
+                    raise RuntimeError(
+                        "clock did not advance after "
+                        f"{stalled} sleeps; acquire() cannot make progress "
+                        "(is the injected clock frozen or too coarse for the "
+                        "requested refill rate?)"
+                    )
+            else:
+                stalled = 0
 
 
 class SlidingWindowCounter:
