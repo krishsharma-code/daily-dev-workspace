@@ -13,6 +13,12 @@ Precedence follows the spec exactly, including the parts people get wrong:
 build metadata is ignored, numeric prerelease identifiers compare numerically
 (``beta.2 < beta.11``), and a version with a prerelease sorts *below* its
 release.
+
+Every rejection raises :class:`SemVerError`, a ``ValueError`` subclass, so one
+``except`` clause covers malformed input from any entry point. That holds for
+hostile input too: numeric components are capped at
+``_MAX_NUMERIC_DIGITS`` digits so that a 5000-digit "version" cannot turn a
+parse into a CPU burn or escape as a bare ``ValueError`` from ``int()``.
 """
 
 from __future__ import annotations
@@ -51,6 +57,35 @@ _NUMERIC = re.compile(r"[0-9]+")
 _IDENT = re.compile(r"[0-9A-Za-z-]+")
 _WILDCARDS = ("*", "x", "X")
 
+# Guard rail for untrusted input. CPython 3.11+ makes ``int()`` refuse a string
+# longer than ``sys.get_int_max_str_digits()`` (4300 by default) and older
+# builds spend quadratic time on one, so a hostile version string could either
+# burn CPU or raise a bare ``ValueError`` straight past the ``SemVerError``
+# contract this module documents. No real version component is remotely this
+# long, so the cap costs nothing and keeps every rejection on one exception
+# type. Build identifiers are *not* capped: they are never converted to ``int``.
+_MAX_NUMERIC_DIGITS = 64
+
+
+def _to_int(text: str) -> int:
+    """``int()`` for an untrusted numeric identifier, bounded and typed.
+
+    Every conversion of attacker-controlled digits goes through here so that
+    an over-long component surfaces as :class:`SemVerError` rather than as the
+    ``ValueError`` ``int()`` itself raises when ``sys.get_int_max_str_digits()``
+    is exceeded (or, on interpreters without that limit, as a CPU burn).
+    """
+    if len(text) > _MAX_NUMERIC_DIGITS:
+        raise SemVerError(
+            f"numeric identifier has {len(text)} digits, limit is {_MAX_NUMERIC_DIGITS}"
+        )
+    try:
+        return int(text)
+    except ValueError:  # pragma: no cover - the length check above gets there first
+        # Only reachable if the embedding process lowered
+        # ``sys.set_int_max_str_digits()`` below our own cap.
+        raise SemVerError(f"invalid numeric identifier {text!r}") from None
+
 
 def _split_identifiers(text: str, label: str) -> Tuple[str, ...]:
     """Split a dot-separated identifier list, enforcing the spec's rules."""
@@ -62,6 +97,14 @@ def _split_identifiers(text: str, label: str) -> Tuple[str, ...]:
             raise SemVerError(f"invalid {label} identifier {part!r}")
         if label == "prerelease" and _NUMERIC.fullmatch(part) and len(part) > 1 and part[0] == "0":
             raise SemVerError(f"numeric {label} identifier {part!r} has a leading zero")
+        if label == "prerelease" and len(part) > _MAX_NUMERIC_DIGITS and _NUMERIC.fullmatch(part):
+            # Rejected at construction rather than at first comparison: a
+            # ``Version`` carrying this identifier would otherwise parse fine
+            # and then blow up inside ``precedence_key()`` on any sort.
+            raise SemVerError(
+                f"numeric prerelease identifier has {len(part)} digits, "
+                f"limit is {_MAX_NUMERIC_DIGITS}"
+            )
     return tuple(parts)
 
 
@@ -116,6 +159,10 @@ class Version:
 
         Strict means exactly three numeric parts, no ``v`` prefix, no ``=``,
         no leading zeros. Whitespace around the whole string is tolerated.
+
+        Each of the three numeric parts is limited to
+        ``_MAX_NUMERIC_DIGITS`` digits; anything longer raises
+        :class:`SemVerError` instead of reaching ``int()``.
         """
         if not isinstance(text, str):
             raise SemVerError(f"version must be a string, got {type(text).__name__}")
@@ -146,7 +193,7 @@ class Version:
                 raise SemVerError(f"invalid version {raw!r}: {part!r} is not a number")
             if len(part) > 1 and part[0] == "0":
                 raise SemVerError(f"invalid version {raw!r}: {part!r} has a leading zero")
-            numbers.append(int(part))
+            numbers.append(_to_int(part))
 
         return cls(numbers[0], numbers[1], numbers[2], prerelease, build)
 
@@ -170,8 +217,12 @@ class Version:
 
     def precedence_key(self):
         """Sort key implementing the spec's precedence rules."""
+        # Numeric identifiers sort below alphanumeric ones (the leading 0/1
+        # tag), and numerically rather than lexically, so ``beta.2 < beta.11``.
+        # ``_to_int`` cannot raise here: ``__post_init__`` already rejected an
+        # over-long numeric prerelease identifier.
         identifiers = tuple(
-            (0, int(part)) if _NUMERIC.fullmatch(part) else (1, part)
+            (0, _to_int(part)) if _NUMERIC.fullmatch(part) else (1, part)
             for part in self.prerelease
         )
         # A release outranks any prerelease of the same triple, and a longer
@@ -237,7 +288,7 @@ class Version:
                 rest = self.prerelease[1:]
                 for index in range(len(rest) - 1, -1, -1):
                     if _NUMERIC.fullmatch(rest[index]):
-                        tail = rest[:index] + (str(int(rest[index]) + 1),)
+                        tail = rest[:index] + (str(_to_int(rest[index]) + 1),)
                         return Version(*self.release, (identifier,) + tail)
                 return Version(*self.release, (identifier,) + rest + ("0",))
             return Version(*self.release, (identifier, "0"))
@@ -247,7 +298,7 @@ class Version:
         parts = list(self.prerelease)
         for index in range(len(parts) - 1, -1, -1):
             if _NUMERIC.fullmatch(parts[index]):
-                parts[index] = str(int(parts[index]) + 1)
+                parts[index] = str(_to_int(parts[index]) + 1)
                 return Version(*self.release, tuple(parts))
         return Version(*self.release, tuple(parts) + ("0",))
 
@@ -293,6 +344,9 @@ class Comparator:
             raise SemVerError("comparator needs a Version")
 
     def test(self, version: Version) -> bool:
+        # Compare precedence keys, not ``Version`` objects: ``<`` on the
+        # dataclass would honour build metadata through ``identical()``
+        # semantics, while a comparator must ignore it.
         left, right = version.precedence_key(), self.version.precedence_key()
         if self.op == "=":
             return left == right
@@ -352,7 +406,13 @@ class Range:
             raise SemVerError("a range needs at least one comparator set")
 
     @classmethod
-    def parse(cls, text: str) -> "Range":
+    def parse(cls, text: "str | Range") -> "Range":
+        """Parse an npm-style range, or pass a :class:`Range` straight through.
+
+        ``""``, ``"*"`` and ``"any"`` all mean "matches everything"; an empty
+        alternative such as ``"1.2.3 ||"`` is a typo and raises rather than
+        silently widening the range to all versions.
+        """
         if isinstance(text, Range):
             return text
         if not isinstance(text, str):
@@ -416,7 +476,7 @@ def _parse_partial(text: str):
                 raise SemVerError(f"invalid version {raw!r} in range: wildcard must come last")
             if len(part) > 1 and part[0] == "0":
                 raise SemVerError(f"invalid version {raw!r} in range: {part!r} has a leading zero")
-            parts.append(int(part))
+            parts.append(_to_int(part))
 
     if len(parts) > 3:
         raise SemVerError(f"invalid version {raw!r} in range: too many parts")
@@ -430,7 +490,13 @@ def _parse_partial(text: str):
 
 
 def _expand(operator: str, major, minor, patch, prerelease) -> Tuple[Comparator, ...]:
-    """Turn one range token into the comparators that implement it."""
+    """Turn one range token into the comparators that implement it.
+
+    ``None`` marks a wildcard position, and an empty tuple means "no
+    constraint" (``>=*`` matches anything). The ``x or 0`` idiom below relies
+    on ``None`` and ``0`` collapsing to the same value — a real zero in a
+    position that is also a legal wildcard cannot mean anything else.
+    """
 
     def exact() -> Version:
         return _version(major, minor, patch, prerelease)
@@ -534,6 +600,7 @@ def _hyphen(low: str, high: str) -> Tuple[Comparator, ...]:
 
 
 def _parse_comparator_set(text: str) -> ComparatorSet:
+    """Parse one ``||``-free chunk into the conjunction it describes."""
     chunk = text.strip()
     if chunk in ("", "*", "x", "X", "any", "latest"):
         return ComparatorSet(())
@@ -546,7 +613,9 @@ def _parse_comparator_set(text: str) -> ComparatorSet:
         token = tokens[index]
         # Hyphen range: "<low> - <high>". The dash must stand alone, which is
         # what keeps "1.2.3-beta - 2.0.0" a hyphen range rather than a version
-        # called "beta - 2.0.0".
+        # called "beta - 2.0.0". ``index + 2 < len(tokens)`` is the guard that
+        # both operands exist, so a trailing "1.2.3 -" falls through to the
+        # explicit error below instead of raising ``IndexError``.
         if index + 2 < len(tokens) and tokens[index + 1] == "-":
             comparators.extend(_hyphen(token, tokens[index + 2]))
             index += 3
@@ -563,6 +632,8 @@ def _parse_comparator_set(text: str) -> ComparatorSet:
         if not token:
             raise SemVerError(f"range {text!r}: operator {operator!r} has no version")
 
+        # Build metadata inside a range token is parsed for validation and then
+        # dropped: precedence ignores it, so ``>=1.2.3+sha`` is just ``>=1.2.3``.
         parts, prerelease, _build = _parse_partial(token)
         comparators.extend(_expand(operator, parts[0], parts[1], parts[2], prerelease))
         index += 1
@@ -595,6 +666,11 @@ def sort_versions(versions: Iterable, *, reverse: bool = False) -> list:
 
 
 def _best(versions: Iterable, spec, *, include_prerelease: bool, want_max: bool):
+    """Shared body of :func:`max_satisfying` / :func:`min_satisfying`.
+
+    Iterates once, keeps no list, and compares by precedence — so two versions
+    that differ only in build metadata tie and the first one seen wins.
+    """
     target = Range.parse(spec)
     best: Optional[Version] = None
     for item in versions:

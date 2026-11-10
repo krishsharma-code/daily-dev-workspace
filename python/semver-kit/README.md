@@ -40,6 +40,20 @@ Everything invalid raises `SemVerError`, a `ValueError` subclass: a bad
 version, a bad range, a `bool` where a number belongs, a non-string, a range
 operator with nothing after it.
 
+### Input limits
+
+That contract holds for hostile input too. A numeric component — a release
+part or a numeric prerelease identifier — is capped at **64 digits**; anything
+longer raises `SemVerError`. Without the cap, `int()` on a 5000-digit "version"
+would either burn quadratic CPU or raise a bare `ValueError` that slipped
+straight past the `SemVerError` a caller was told to catch. No real version
+component is anywhere near 64 digits, and build metadata is not capped because
+it is never converted to an integer.
+
+This is a parser boundary, not a sanitiser: it decides whether a string *is* a
+version. If the string came off the network, cap its total length yourself
+before calling in.
+
 ## Precedence, including the parts people get wrong
 
 Build metadata is ignored — `1.0.0+a == 1.0.0+b`, and neither is "greater".
@@ -152,7 +166,8 @@ python/semver-kit/
 ├── example.py               # runnable demo
 ├── conftest.py              # makes the module importable in tests
 └── tests/
-    └── test_semver_kit.py
+    ├── test_semver_kit.py     # parsing, precedence, bumping, ranges
+    └── test_input_limits.py   # the SemVerError contract under hostile input
 ```
 
 ## Run the demo
@@ -173,10 +188,13 @@ cd python/semver-kit
 python -m pytest
 ```
 
-198 tests: every valid and invalid parse shape, the spec's precedence chain and
+221 tests: every valid and invalid parse shape, the spec's precedence chain and
 each individual tie-break rule, build-metadata equality and hashing, all four
 bump operations including prerelease release, every range form and its
 expansion, hyphen ranges, unions, partial and wildcard operators (`>1.2`,
 `<=1.2`, `<1.2`), the prerelease gate per alternative, `include_prerelease`,
-selection helpers, and a realistic dependency-resolution scenario.
+selection helpers, a realistic dependency-resolution scenario, and the
+input-limit boundary — that a 5000-digit component raises `SemVerError` (not a
+bare `ValueError`) from `parse`, `parse_range`, `satisfies` and `sort_versions`,
+that 64 digits still works, and that build identifiers stay uncapped.
 `pytest` is needed only to run the suite.
