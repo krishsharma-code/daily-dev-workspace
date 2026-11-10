@@ -106,6 +106,14 @@ def show_errors():
             parse_range(bad)
         except SemVerError as error:
             print(f"  {bad!r:>18}  {error}")
+    # Hostile input stays on the same exception type: the digit cap keeps
+    # int()'s own ValueError from escaping.
+    huge = "1" * 5000
+    for label, bad in (("<5000 digits>.0.0", f"{huge}.0.0"), ("1.2.3-<5000 digits>", f"1.2.3-{huge}")):
+        try:
+            Version.parse(bad)
+        except SemVerError as error:
+            print(f"  {label:>18}  {error}")
     print()
 
 
