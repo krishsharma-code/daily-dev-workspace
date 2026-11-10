@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Expense Split &mdash; shared bills, settled exactly</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand__mark" aria-hidden="true">&#8377;</span>
+        <div>
+          <h1>Expense Split</h1>
+          <p class="brand__tag">Shared bills, split to the last paisa</p>
+        </div>
+      </div>
+      <p class="topbar__note">
+        Amounts are kept as whole paise, so every split adds back up to what was
+        actually paid.
+      </p>
+    </header>
+
+    <main class="layout">
+      <aside class="panel panel--groups">
+        <h2>Groups</h2>
+        <form id="group-form" class="stack" autocomplete="off">
+          <label>
+            <span>Group name</span>
+            <input name="name" type="text" placeholder="Goa Trip" maxlength="80" required />
+          </label>
+          <label>
+            <span>Members <small>(comma separated)</small></span>
+            <input
+              name="members"
+              type="text"
+              placeholder="asha, rahul, meera"
+              required
+            />
+          </label>
+          <button type="submit" class="btn btn--primary">Create group</button>
+        </form>
+        <ul id="group-list" class="group-list" aria-label="Existing groups"></ul>
+        <p id="group-empty" class="hint">No groups yet. Create one to start.</p>
+      </aside>
+
+      <section class="panel panel--workspace">
+        <div id="workspace-empty" class="empty">
+          <h2>Nothing selected</h2>
+          <p>Pick a group on the left, or create a new one.</p>
+        </div>
+
+        <div id="workspace" hidden>
+          <div class="workspace__head">
+            <div>
+              <h2 id="group-title">&nbsp;</h2>
+              <p id="group-meta" class="hint"></p>
+            </div>
+            <button id="delete-group" type="button" class="btn btn--ghost">
+              Delete group
+            </button>
+          </div>
+
+          <form id="expense-form" class="stack expense-form" autocomplete="off">
+            <div class="grid grid--three">
+              <label>
+                <span>What was it for?</span>
+                <input name="description" type="text" placeholder="Beach shack dinner" maxlength="200" required />
+              </label>
+              <label>
+                <span>Paid by</span>
+                <select name="payer" id="payer-select" required></select>
+              </label>
+              <label>
+                <span>Amount (&#8377;)</span>
+                <input
+                  name="amount"
+                  type="text"
+                  inputmode="decimal"
+                  placeholder="2400.00"
+                  required
+                />
+              </label>
+            </div>
+
+            <fieldset class="split">
+              <legend>How should it be split?</legend>
+              <div class="split__types" role="radiogroup" aria-label="Split type">
+                <label class="chip">
+                  <input type="radio" name="split-type" value="equal" checked />
+                  <span>Equally</span>
+                </label>
+                <label class="chip">
+                  <input type="radio" name="split-type" value="exact" />
+                  <span>Exact amounts</span>
+                </label>
+                <label class="chip">
+                  <input type="radio" name="split-type" value="weights" />
+                  <span>By weight</span>
+                </label>
+              </div>
+              <div id="split-fields" class="split__fields"></div>
+              <p id="split-preview" class="split__preview" aria-live="polite"></p>
+            </fieldset>
+
+            <button type="submit" class="btn btn--primary">Add expense</button>
+          </form>
+
+          <div class="grid grid--two">
+            <section class="card">
+              <h3>Expenses</h3>
+              <div class="table-wrap">
+                <table id="expense-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Item</th>
+                      <th scope="col">Paid by</th>
+                      <th scope="col" class="num">Amount</th>
+                      <th scope="col"><span class="sr-only">Remove</span></th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <p id="expense-empty" class="hint">No expenses yet.</p>
+            </section>
+
+            <section class="card">
+              <h3>Balances</h3>
+              <ul id="balance-list" class="balance-list"></ul>
+              <h4>Settle up</h4>
+              <ul id="settlement-list" class="settlement-list"></ul>
+              <p id="settlement-empty" class="hint">All square &mdash; nobody owes anybody.</p>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <p id="toast" class="toast" role="status" aria-live="polite" hidden></p>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>

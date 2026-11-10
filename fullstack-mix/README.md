@@ -17,6 +17,9 @@ Mixed projects that combine a front end and a back end. Each project is split in
 - [`feature-flags/`](feature-flags/) — a feature-flag service with
   deterministic rollout bucketing and allowlists: a stdlib Python server
   (SQLite + REST API) with a vanilla HTML/CSS/JS console.
+- [`expense-split/`](expense-split/) — split shared bills to the last paisa and
+  settle up with the fewest payments: a stdlib Python server (SQLite + REST API,
+  integer-paise splitting engine) with a vanilla HTML/CSS/JS client.
 
 ## Conventions
 
