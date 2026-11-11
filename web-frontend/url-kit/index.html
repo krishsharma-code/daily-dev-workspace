@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>url-kit — query string playground</title>
+  <link rel="stylesheet" href="url-kit.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="masthead">
+      <h1>url-kit</h1>
+      <p class="lede">
+        Query strings and URLs, handled carefully: nested and repeated params,
+        strict RFC 3986 encoding, tolerant decoding, and edits that leave the
+        rest of the URL untouched.
+      </p>
+    </header>
+
+    <section class="card">
+      <label class="field">
+        <span class="field-label">URL</span>
+        <input id="url" type="text" spellcheck="false" autocomplete="off"
+          value="https://shop.example.com/search?q=wireless+earbuds&amp;tag%5B%5D=audio&amp;tag%5B%5D=sale&amp;filter%5Bprice%5D=under%205000&amp;sort=popular#results" />
+      </label>
+
+      <div class="edit-row">
+        <label class="field field-key">
+          <span class="field-label">Key</span>
+          <input id="key" type="text" placeholder="page" spellcheck="false" autocomplete="off" />
+        </label>
+        <label class="field field-value">
+          <span class="field-label">Value</span>
+          <input id="value" type="text" placeholder="2" spellcheck="false" autocomplete="off" />
+        </label>
+        <div class="buttons">
+          <button id="set" type="button">Set param</button>
+          <button id="remove" type="button" class="ghost">Remove key</button>
+          <button id="reset" type="button" class="ghost">Reset</button>
+        </div>
+      </div>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card">
+      <h2>Parsed params</h2>
+      <p class="muted">
+        <code>parseQuery</code> — repeated keys become arrays, <code>a[]</code>
+        and <code>a[b]</code> become nested values, and every value is decoded.
+      </p>
+      <table class="params">
+        <thead>
+          <tr><th scope="col">Key path</th><th scope="col">Value</th></tr>
+        </thead>
+        <tbody id="params-body"></tbody>
+      </table>
+      <p id="params-empty" class="muted" hidden>This URL has no query params.</p>
+    </section>
+
+    <section class="card">
+      <h2>Re-serialised by url-kit</h2>
+      <p class="muted">
+        <code>stringifyQuery(parseQuery(search))</code> — note the array and
+        nested params written back out, and the space encoded as <code>%20</code>
+        rather than <code>+</code>.
+      </p>
+      <pre id="stringified" class="code"></pre>
+    </section>
+
+    <section class="card">
+      <h2>url-kit vs <code>URLSearchParams</code></h2>
+      <p class="muted">
+        The platform encoder leaves <code>!'()*</code> raw — legal in a path, but
+        sub-delimiters in a query — and always writes a space as <code>+</code>.
+      </p>
+      <table class="params">
+        <thead>
+          <tr>
+            <th scope="col">Input</th>
+            <th scope="col">url-kit</th>
+            <th scope="col"><code>URLSearchParams</code></th>
+          </tr>
+        </thead>
+        <tbody id="encoding-body"></tbody>
+      </table>
+    </section>
+
+    <footer class="footer">
+      <p>
+        Open this file directly from disk or serve the folder — the module is a
+        plain ES import, no build step. Run <code>npm test</code> for the suite.
+      </p>
+    </footer>
+  </main>
+
+  <script type="module">
+    import {
+      parseQuery,
+      stringifyQuery,
+      setQuery,
+      removeQuery,
+      encodeQueryComponent,
+    } from "./url-kit.js";
+
+    const urlInput = document.getElementById("url");
+    const keyInput = document.getElementById("key");
+    const valueInput = document.getElementById("value");
+    const statusEl = document.getElementById("status");
+    const paramsBody = document.getElementById("params-body");
+    const paramsEmpty = document.getElementById("params-empty");
+    const stringifiedEl = document.getElementById("stringified");
+    const encodingBody = document.getElementById("encoding-body");
+
+    const initialUrl = urlInput.value;
+
+    function flatten(value, path, rows) {
+      if (Array.isArray(value)) {
+        if (value.length === 0) {
+          rows.push([path, "(empty array)"]);
+          return;
+        }
+        for (const item of value) flatten(item, `${path}[]`, rows);
+        return;
+      }
+      if (value && typeof value === "object") {
+        for (const key of Object.keys(value)) {
+          flatten(value[key], `${path}[${key}]`, rows);
+        }
+        return;
+      }
+      rows.push([path, value === "" ? "(empty)" : value]);
+    }
+
+    function render() {
+      const url = urlInput.value.trim();
+      let params;
+      let search = "";
+
+      try {
+        const parsed = new URL(url);
+        search = parsed.search;
+        params = parseQuery(search);
+      } catch {
+        params = parseQuery(url);
+        search = url.includes("?") ? url.slice(url.indexOf("?")) : "";
+      }
+
+      paramsBody.replaceChildren();
+      const rows = [];
+      for (const key of Object.keys(params)) flatten(params[key], key, rows);
+
+      for (const [path, value] of rows) {
+        const tr = document.createElement("tr");
+        const keyCell = document.createElement("td");
+        keyCell.textContent = path;
+        keyCell.className = "mono";
+        const valueCell = document.createElement("td");
+        valueCell.textContent = String(value);
+        valueCell.className = "mono";
+        tr.append(keyCell, valueCell);
+        paramsBody.append(tr);
+      }
+
+      paramsEmpty.hidden = rows.length > 0;
+      stringifiedEl.textContent = stringifyQuery(params) || "(nothing to serialise)";
+    }
+
+    function announce(message) {
+      statusEl.textContent = message;
+    }
+
+    document.getElementById("set").addEventListener("click", () => {
+      const key = keyInput.value.trim();
+      if (!key) {
+        announce("Type a key first, for example page.");
+        keyInput.focus();
+        return;
+      }
+      const value = valueInput.value;
+      urlInput.value = setQuery(urlInput.value, key, value);
+      announce(`Set ${key}. Only that pair changed — the rest kept its exact encoding.`);
+      render();
+    });
+
+    document.getElementById("remove").addEventListener("click", () => {
+      const key = keyInput.value.trim();
+      if (!key) {
+        announce("Type the key you want to remove.");
+        keyInput.focus();
+        return;
+      }
+      urlInput.value = removeQuery(urlInput.value, key);
+      announce(`Removed every ${key} pair.`);
+      render();
+    });
+
+    document.getElementById("reset").addEventListener("click", () => {
+      urlInput.value = initialUrl;
+      keyInput.value = "";
+      valueInput.value = "";
+      announce("Back to the starting URL.");
+      render();
+    });
+
+    urlInput.addEventListener("input", () => {
+      announce("");
+      render();
+    });
+
+    const samples = ["a b", "it's (a) test!", "₹1,234", "a+b", "tag[]=1"];
+    for (const sample of samples) {
+      const tr = document.createElement("tr");
+      const input = document.createElement("td");
+      input.textContent = sample;
+      input.className = "mono";
+      const ours = document.createElement("td");
+      ours.textContent = encodeQueryComponent(sample);
+      ours.className = "mono good";
+      const theirs = document.createElement("td");
+      theirs.textContent = new URLSearchParams({ q: sample }).toString().slice(2);
+      theirs.className = "mono muted";
+      tr.append(input, ours, theirs);
+      encodingBody.append(tr);
+    }
+
+    render();
+  </script>
+</body>
+</html>

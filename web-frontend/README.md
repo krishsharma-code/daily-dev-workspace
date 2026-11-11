@@ -11,6 +11,7 @@ Standalone front-end work: HTML, CSS, and modern JavaScript components and utili
 - [`keyboard-shortcuts/`](keyboard-shortcuts/) — shortcut registry with chord/sequence matching, scopes and platform-aware labels.
 - [`storage-kit/`](storage-kit/) — namespaced, TTL-aware store over Web Storage with lazy expiry, quota recovery and safe reads.
 - [`undo-stack/`](undo-stack/) — undo/redo history manager with keystroke coalescing and transactions.
+- [`url-kit/`](url-kit/) — query string and URL utilities: nested and repeated params, strict RFC 3986 encoding, tolerant decoding and surgical edits.
 
 ## Conventions
 
