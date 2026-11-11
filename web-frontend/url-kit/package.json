@@ -1,0 +1,11 @@
+{
+  "name": "url-kit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Query strings and URLs done carefully: nested and repeated params, strict RFC 3986 encoding, tolerant decoding and surgical URL edits.",
+  "main": "url-kit.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}
