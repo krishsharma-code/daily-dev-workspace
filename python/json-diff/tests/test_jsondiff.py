@@ -453,3 +453,69 @@ def test_in_place_failure_keeps_earlier_operations():
             in_place=True,
         )
     assert document == {"a": 1, "b": 2}
+
+
+# --------------------------------------------------------------------------
+# Hostile input: index conversion and non-string object keys
+# --------------------------------------------------------------------------
+
+
+def test_apply_rejects_overlong_array_index():
+    # CPython 3.11+ refuses int() on a decimal string longer than 4300 digits
+    # with ValueError. Left unguarded that escapes the documented contract, so
+    # the token is length-capped before conversion.
+    huge = "1" + "0" * 4999
+    document = {"a": [1, 2, 3]}
+    for operation in (
+        {"op": "remove", "path": f"/a/{huge}"},
+        {"op": "replace", "path": f"/a/{huge}", "value": 9},
+        {"op": "add", "path": f"/a/{huge}", "value": 9},
+        {"op": "test", "path": f"/a/{huge}", "value": 1},
+    ):
+        with pytest.raises(PatchError, match="cannot be in range"):
+            apply(document, [operation])
+    assert document == {"a": [1, 2, 3]}
+
+
+def test_apply_index_cap_boundary_is_still_out_of_range():
+    # 20 digits is inside the cap, so it reaches the range check and is
+    # reported as out of range rather than as an unparseable index.
+    token = "9" * 20
+    with pytest.raises(PatchError, match="out of range"):
+        apply({"a": [1]}, [{"op": "remove", "path": f"/a/{token}"}])
+
+
+def test_apply_index_range_checks_still_work():
+    # The length cap must not swallow the ordinary out-of-range and append
+    # cases it now runs in front of.
+    document = {"a": [0, 1, 2]}
+    with pytest.raises(PatchError, match="out of range"):
+        apply(document, [{"op": "remove", "path": "/a/3"}])
+    assert apply(document, [{"op": "add", "path": "/a/3", "value": 3}]) == {
+        "a": [0, 1, 2, 3]
+    }
+    assert document == {"a": [0, 1, 2]}  # the default mode never mutates
+
+
+def test_diff_rejects_non_string_object_keys():
+    # str(1) == "1", so the generated pointer /1 would address the *string*
+    # member on replay: the round-trip breaks, or worse, rewrites the wrong one.
+    with pytest.raises(TypeError, match="object keys must be str, not int"):
+        diff({1: "a"}, {1: "b"})
+    with pytest.raises(TypeError, match="object keys must be str, not tuple"):
+        diff({"outer": {(1, 2): "a"}}, {"outer": {(1, 2): "b"}})
+    # A key only present in the target is caught too (it becomes an 'add').
+    with pytest.raises(TypeError, match="object keys must be str, not int"):
+        diff({"a": 1}, {"a": 1, 2: "b"})
+
+
+def test_diff_error_names_the_container_path():
+    with pytest.raises(TypeError, match=r"at '/outer/env'"):
+        diff({"outer": {"env": {1: "x"}}}, {"outer": {"env": {1: "y"}}})
+
+
+def test_diff_accepts_string_keys_that_look_like_indices():
+    # Only the type matters: "1" is a perfectly good member name.
+    patch = diff({"1": "x"}, {"1": "y"})
+    assert patch == [{"op": "replace", "path": "/1", "value": "y"}]
+    assert apply({"1": "x"}, patch) == {"1": "y"}

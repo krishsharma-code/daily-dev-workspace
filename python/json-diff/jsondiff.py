@@ -19,6 +19,14 @@ operation as untrusted input: the operation name, ``path`` and ``from`` are
 type-checked before use, array indices must be ASCII digits, and every
 malformed patch raises :class:`PatchError` (or :class:`PointerError`) rather
 than leaking a ``TypeError`` / ``ValueError`` from deep inside the walk.
+That promise includes the conversion step: an index token is length-capped
+before ``int()`` sees it, because CPython 3.11+ refuses a decimal string
+longer than 4300 digits with its own ``ValueError``.
+
+Documents are expected to be JSON-like, so object keys must be ``str``.
+:func:`diff` refuses a document whose keys are not, rather than stringifying
+them into a pointer (``/1``) that would address a *different* member when the
+patch is replayed.
 
     >>> diff({"a": 1}, {"a": 2})
     [{'op': 'replace', 'path': '/a', 'value': 2}]
@@ -45,6 +53,13 @@ __all__ = [
 
 #: Operations understood by :func:`apply`.
 OPERATIONS = frozenset({"add", "remove", "replace", "move", "copy", "test"})
+
+#: Longest array-index token accepted, in digits. ``sys.maxsize`` is 19 digits,
+#: so no list can index past 20 and the cap rejects nothing that could work.
+#: It is checked *before* ``int()`` on purpose: CPython 3.11+ raises
+#: ``ValueError`` (not :class:`PatchError`) for a decimal string over 4300
+#: digits, and converting a million-digit token is wasted work besides.
+MAX_INDEX_DIGITS = 20
 
 
 class PointerError(ValueError):
@@ -155,14 +170,41 @@ def diff(source: Any, target: Any) -> list[dict[str, Any]]:
 
     The returned operations are applied in order and are sufficient on their
     own: ``apply(source, diff(source, target))`` equals ``target``.
+
+    Raises :class:`TypeError` if either document holds an object key that is
+    not a ``str``: a JSON Pointer cannot address such a member, and rendering
+    it anyway would produce a patch that replays onto the wrong one.
     """
     operations: list[dict[str, Any]] = []
     _diff(source, target, (), operations)
     return operations
 
 
+def _require_str_key(key: Any, path: tuple[str, ...]) -> None:
+    """Reject an object key that a JSON Pointer cannot express.
+
+    :func:`to_pointer` renders each token with ``str()``, so the int key ``1``
+    is written as ``/1`` -- a pointer that, coming back in through
+    :func:`apply`, addresses the *string* member ``"1"``. Replaying the patch
+    then either fails (``no such member '1'``) or, when the document holds both
+    keys, quietly rewrites the wrong member. JSON object keys are strings, so
+    the document is refused here instead of producing a patch that cannot
+    round-trip.
+    """
+    if not isinstance(key, str):
+        where = to_pointer(path) or "/"
+        raise TypeError(
+            f"object keys must be str, not {type(key).__name__} (at {where!r}); "
+            "a JSON Pointer cannot address that member"
+        )
+
+
 def _diff(source: Any, target: Any, path: tuple[str, ...], ops: list[dict[str, Any]]) -> None:
     if isinstance(source, dict) and isinstance(target, dict):
+        for key in source:
+            _require_str_key(key, path)
+        for key in target:
+            _require_str_key(key, path)
         for key in source:
             if key not in target:
                 ops.append({"op": "remove", "path": to_pointer(path + (key,))})
@@ -369,6 +411,14 @@ def _index(container: list[Any], token: str, *, lenient: bool) -> int:
         raise PatchError(f"invalid array index {token!r}")
     if len(token) > 1 and token.startswith("0"):
         raise PatchError(f"invalid array index {token!r}")
+    # Cap the digits before converting: ``int()`` raises its own ``ValueError``
+    # above 4300 digits on CPython 3.11+, which would escape as neither a
+    # PatchError nor a PointerError. Nothing this long can be in range anyway.
+    if len(token) > MAX_INDEX_DIGITS:
+        raise PatchError(
+            f"array index {token[:8]}... ({len(token)} digits) cannot be in range "
+            f"for length {len(container)}"
+        )
     index = int(token)
     limit = len(container) if lenient else len(container) - 1
     if index > limit:

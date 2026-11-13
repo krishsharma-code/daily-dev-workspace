@@ -29,6 +29,10 @@ means the patch never depends on element identity. It does not try to detect
 moves — a reordered array reads as a run of replacements, which is correct but
 not minimal. Where patch size really matters, emit a `move` by hand.
 
+Object keys must be `str`; a document with any other key type raises
+`TypeError` rather than producing a patch that cannot be replayed — see
+[Documents must be JSON-like](#documents-must-be-json-like).
+
 **`apply(document, patch, *, in_place=False) -> Any`**
 
 | Operation | Notes |
@@ -61,12 +65,27 @@ walks. Three checks exist because the obvious versions of them leak:
 | `op` that is a dict | `TypeError: unhashable type` out of a set-membership test | `PatchError: 'op' must be a string` |
 | `path` / `from` that is a list or `None` | `TypeError` out of `parse_pointer` | `PatchError: 'path' must be a string` |
 | Array index `"٣"` (Arabic-Indic 3) or `"²"` | `str.isdigit()` accepts both: the first silently addresses index 3, the second raises `ValueError` from `int()` | `PatchError: invalid array index` |
+| Array index of 5000 digits | `int()` raises `ValueError: Exceeds the limit (4300 digits)` on CPython 3.11+ | `PatchError: array index 10000000... (5000 digits) cannot be in range` |
 
 Array indices are therefore checked against the RFC 6901 grammar (ASCII `0` or
-`[1-9][0-9]*`) rather than `str.isdigit()`. Nothing here guards against a
-patch that is simply *large* or deeply nested: the copy and the recursive walk
-are proportional to the document, so cap patch size at the boundary where you
-accept it (an HTTP body limit, a queue message limit) rather than in here.
+`[1-9][0-9]*`) rather than `str.isdigit()`, and the token is length-capped at
+`MAX_INDEX_DIGITS` (20) *before* conversion — `sys.maxsize` is 19 digits, so
+the cap rejects nothing that could ever be in range, and it keeps the token
+away from an `int()` that raises its own `ValueError` above 4300 digits.
+Nothing here guards against a patch that is simply *large* or deeply nested:
+the copy and the recursive walk are proportional to the document, so cap patch
+size at the boundary where you accept it (an HTTP body limit, a queue message
+limit) rather than in here.
+
+## Documents must be JSON-like
+
+Object keys have to be `str`. `diff` raises `TypeError` for anything else
+instead of stringifying it: the int key `1` renders as the pointer `/1`, which
+on replay addresses the *string* member `"1"`. The patch would then either
+fail with `no such member '1'` or, if the document holds both keys, silently
+rewrite the wrong one — a corrupted round-trip is worse than a refused one.
+The error names the container, e.g. `object keys must be str, not int (at
+'/outer/env')`.
 
 ## Equality is JSON-strict
 
@@ -105,9 +124,10 @@ cd python/json-diff
 python -m pytest
 ```
 
-57 tests: pointer escaping, every operation (including the failure modes),
+63 tests: pointer escaping, every operation (including the failure modes),
 immutability, malformed-patch hardening (non-string `op` / `path` / `from`,
-non-ASCII indices, non-sequence patches), and a seeded randomised round-trip
+non-ASCII indices, over-long indices, non-sequence patches, non-string object
+keys), and a seeded randomised round-trip
 that checks `apply(a, diff(a, b)) == b` across 300 generated document pairs. No third-party
 dependency at runtime; `pytest` is needed only to run the suite.
 
