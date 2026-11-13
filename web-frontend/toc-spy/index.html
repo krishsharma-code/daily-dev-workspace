@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>toc-spy — table of contents with scroll spy</title>
+  <link rel="stylesheet" href="toc-spy.css" />
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1c2230;
+      --muted: #5b6474;
+      --rule: #e6e9ef;
+      --accent: #2563eb;
+      --bg: #fbfcfe;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    header.top {
+      border-bottom: 1px solid var(--rule);
+      background: #fff;
+      padding: 1rem 1.5rem;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      gap: 1rem;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+    header.top h1 { margin: 0; font-size: 1.05rem; letter-spacing: -0.01em; }
+    header.top p { margin: 0; color: var(--muted); font-size: 0.85rem; }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 260px;
+      gap: 3rem;
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 60vh;
+      align-items: start;
+    }
+    @media (max-width: 780px) {
+      .layout { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
+      aside { order: -1; }
+    }
+    aside { order: 2; }
+    article h2 {
+      margin: 2.6rem 0 0.8rem;
+      font-size: 1.35rem;
+      letter-spacing: -0.015em;
+      scroll-margin-top: 1rem;
+    }
+    article h2:first-of-type { margin-top: 0; }
+    article h3 { margin: 1.6rem 0 0.5rem; font-size: 1.05rem; }
+    article p, article li { color: #303a4b; }
+    article code {
+      background: #eef2f8;
+      border-radius: 4px;
+      padding: 0.1em 0.35em;
+      font-size: 0.9em;
+    }
+    .panel {
+      border: 1px solid var(--rule);
+      background: #fff;
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+      display: grid;
+      gap: 0.55rem;
+    }
+    .panel strong { color: var(--ink); }
+    .panel label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+    .panel button {
+      justify-self: start;
+      font: inherit;
+      font-size: 0.82rem;
+      padding: 0.35rem 0.7rem;
+      border-radius: 6px;
+      border: 1px solid var(--rule);
+      background: #f6f8fc;
+      cursor: pointer;
+    }
+    .panel button:hover { background: #eef2f8; }
+    .status {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.78rem;
+      color: var(--accent);
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <h1>toc-spy</h1>
+    <p>A table of contents built from your headings, with the current section highlighted as you scroll.</p>
+  </header>
+
+  <div class="layout">
+    <article id="content">
+      <h2>Why a generated table of contents</h2>
+      <p>
+        Long documentation pages are hard to skim. Hand-written tables of contents drift out of
+        sync the moment someone renames a heading, and they almost never tell the reader
+        <em>where they are</em>. <code>toc-spy</code> reads the headings already in your markup,
+        gives them stable anchor ids, and keeps the matching entry highlighted while the reader scrolls.
+      </p>
+
+      <h2>Quick start</h2>
+      <p>Two lines and one element. The nav is filled in for you.</p>
+      <pre><code>import { createTocSpy } from './toc-spy.js';
+
+createTocSpy({
+  content: document.querySelector('article'),
+  nav: document.querySelector('#toc'),
+  offset: 64, // height of a sticky header
+});</code></pre>
+
+      <h3>What it generates</h3>
+      <p>
+        Nested <code>&lt;ul&gt;</code> markup, one anchor per heading, with <code>data-toc-id</code>
+        attributes so styling and the active state need no extra bookkeeping.
+      </p>
+
+      <h3>Anchor ids</h3>
+      <p>
+        Heading text is slugified — diacritics folded, punctuation dropped, duplicates numbered.
+        Headings that already carry an <code>id</code> keep it, so existing deep links still work.
+      </p>
+
+      <h2>Scrolling behaviour</h2>
+      <p>
+        The active entry is the last heading at or above the reading line, so a section stays
+        highlighted while its content is on screen. Scroll to the very bottom and the final
+        section wins, because the last section is usually too short to reach the top.
+      </p>
+
+      <h3>Sticky headers</h3>
+      <p>
+        Pass the header height as <code>offset</code>. It shifts the reading line and the scroll
+        target, so clicked headings never land underneath a fixed header.
+      </p>
+
+      <h3>Resizing and re-rendering</h3>
+      <p>
+        Offsets are re-measured on resize, and a <code>ResizeObserver</code> watches the content
+        element for images loading or sections collapsing. Call <code>refresh()</code> after you
+        add headings yourself — try the button in the panel on the right.
+      </p>
+
+      <h2>Accessibility</h2>
+      <p>
+        The active link gets <code>aria-current="location"</code>, links are real anchors with
+        hashes, and focus outlines are visible. Smooth scrolling is skipped automatically by
+        browsers when the reader prefers reduced motion, and you can turn it off with
+        <code>smooth: false</code>.
+      </p>
+
+      <h2>API</h2>
+      <p>The module exports four pure helpers plus the controller.</p>
+      <ul>
+        <li><code>slugify(text)</code> — heading text to a URL-safe id.</li>
+        <li><code>buildOutline(headings)</code> — flat headings to a nested tree plus a flat list.</li>
+        <li><code>renderOutline(nodes)</code> — outline to escaped, nested list markup.</li>
+        <li><code>findActiveIndex(offsets, scrollTop)</code> — which section owns a scroll position.</li>
+        <li><code>createTocSpy(options)</code> — the DOM controller: <code>refresh</code>, <code>update</code>, <code>destroy</code>.</li>
+      </ul>
+
+      <h2>Browser support</h2>
+      <p>
+        Any browser with ES modules and <code>Element.closest</code>. <code>ResizeObserver</code>
+        is optional — without it the outline is measured on resize only.
+      </p>
+    </article>
+
+    <aside>
+      <div class="panel">
+        <strong>Demo controls</strong>
+        <label><input type="checkbox" id="ordered" /> Ordered list</label>
+        <label><input type="checkbox" id="smooth" checked /> Smooth scrolling</label>
+        <button id="add" type="button">Add a heading</button>
+        <div>Active: <span class="status" id="status">—</span></div>
+      </div>
+
+      <nav id="toc" class="toc-spy toc-spy--sticky" aria-label="On this page"></nav>
+    </aside>
+  </div>
+
+  <script type="module">
+    import { createTocSpy } from './toc-spy.js';
+
+    const content = document.querySelector('#content');
+    const nav = document.querySelector('#toc');
+    const status = document.querySelector('#status');
+    const orderedBox = document.querySelector('#ordered');
+    const smoothBox = document.querySelector('#smooth');
+
+    let toc = null;
+
+    // Options are read when the controller is built, so a rebuild applies changes.
+    function mount() {
+      if (toc) toc.destroy();
+      toc = createTocSpy({
+        content,
+        nav,
+        label: 'On this page',
+        offset: 72,
+        ordered: orderedBox.checked,
+        smooth: smoothBox.checked,
+        onActive: (node) => {
+          status.textContent = node ? node.text : '—';
+        },
+      });
+    }
+
+    mount();
+    orderedBox.addEventListener('change', mount);
+    smoothBox.addEventListener('change', mount);
+
+    let added = 0;
+    document.querySelector('#add').addEventListener('click', () => {
+      added += 1;
+      const h2 = document.createElement('h2');
+      h2.textContent = `Dynamically added section ${added}`;
+      const p = document.createElement('p');
+      p.textContent = 'Added at runtime, then picked up by refresh(). No ids to manage.';
+      content.append(h2, p);
+      toc.refresh();
+    });
+  </script>
+</body>
+</html>

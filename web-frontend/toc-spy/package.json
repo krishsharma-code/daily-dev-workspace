@@ -1,0 +1,11 @@
+{
+  "name": "toc-spy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Table of contents generated from your headings, with scroll-spy highlighting, nested levels and accessible anchors.",
+  "main": "toc-spy.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}
