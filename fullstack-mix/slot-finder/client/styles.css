@@ -1,0 +1,280 @@
+/* Slot Finder — a small, dependency-free console. */
+
+:root {
+  --ink: #14202b;
+  --ink-soft: #5b6b7a;
+  --line: #d8e0e8;
+  --surface: #ffffff;
+  --canvas: #f2f5f8;
+  --accent: #1f6feb;
+  --accent-soft: #e8f0fe;
+  --good: #0f7b52;
+  --bad: #b3261e;
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0 24px 48px;
+  background: var(--canvas);
+  color: var(--ink);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+}
+
+.masthead {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 32px 0 20px;
+}
+
+.masthead h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+  letter-spacing: -0.02em;
+}
+
+.tagline {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--ink-soft);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 20px;
+  max-width: 1180px;
+  margin: 0 auto;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  border: 0;
+  padding: 0;
+}
+
+.field label,
+.field legend {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.hint {
+  font-weight: 400;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+input:focus,
+textarea:focus,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 14px;
+}
+
+.row-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.weekdays {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+}
+
+.weekdays legend {
+  width: 100%;
+  margin-bottom: 2px;
+}
+
+.weekdays label {
+  font-weight: 400;
+  font-size: 13px;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 8px 14px;
+}
+
+button.primary {
+  width: 100%;
+  margin-top: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+button.primary:hover {
+  background: #1a5fd0;
+}
+
+button.ghost {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--ink-soft);
+  font-size: 13px;
+  padding: 5px 10px;
+}
+
+button.ghost:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.error {
+  margin: 12px 0 0;
+  color: var(--bad);
+  font-size: 13px;
+}
+
+.results-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+}
+
+.results-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.summary {
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.output {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.empty {
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.day {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.day-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  background: #f7f9fb;
+  font-size: 13px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+}
+
+.day-head .meta {
+  font-weight: 400;
+  color: var(--ink-soft);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+}
+
+.chip {
+  font: 13px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--accent-soft);
+  color: #12408f;
+  border: 1px solid #c6d9fb;
+  border-radius: 999px;
+  padding: 7px 11px;
+}
+
+.chip:hover {
+  background: #dbe8fd;
+}
+
+.chip.copied {
+  background: #e3f5ec;
+  border-color: #b8e2cd;
+  color: var(--good);
+}
+
+.day-skip {
+  padding: 9px 12px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  background: #fbfcfd;
+}
+
+.footnote {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.truncated {
+  color: var(--bad);
+}
