@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Slot Finder</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <h1>Slot Finder</h1>
+      <p class="tagline">
+        Paste everyone's busy blocks, pick the rules, and see the first free
+        slots — no account, no calendar access.
+      </p>
+    </header>
+
+    <main class="layout">
+      <form id="slot-form" class="panel" novalidate>
+        <div class="field">
+          <label for="busy">Busy blocks <span class="hint">one per line, <code>start/end</code> with a UTC offset</span></label>
+          <textarea id="busy" name="busy" rows="9" spellcheck="false"
+            placeholder="2026-11-16T09:30+05:30/2026-11-16T10:00+05:30"></textarea>
+          <div class="row-actions">
+            <button type="button" id="load-example" class="ghost">Load example</button>
+            <button type="button" id="clear-busy" class="ghost">Clear</button>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="field">
+            <label for="timezone">Time zone</label>
+            <input id="timezone" name="timezone" value="Asia/Kolkata" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="duration">Meeting length (min)</label>
+            <input id="duration" name="duration" type="number" min="1" max="1440" step="5" value="45" />
+          </div>
+          <div class="field">
+            <label for="start-date">From</label>
+            <input id="start-date" name="start_date" type="date" />
+          </div>
+          <div class="field">
+            <label for="end-date">To</label>
+            <input id="end-date" name="end_date" type="date" />
+          </div>
+          <div class="field">
+            <label for="work-start">Working hours from</label>
+            <input id="work-start" name="work_start" type="time" value="09:00" />
+          </div>
+          <div class="field">
+            <label for="work-end">to</label>
+            <input id="work-end" name="work_end" type="time" value="18:00" />
+          </div>
+          <div class="field">
+            <label for="step">Grid step (min)</label>
+            <input id="step" name="step_min" type="number" min="1" max="240" step="5" value="15" />
+          </div>
+          <div class="field">
+            <label for="limit">Max slots</label>
+            <input id="limit" name="limit" type="number" min="1" max="500" value="12" />
+          </div>
+        </div>
+
+        <fieldset class="field weekdays">
+          <legend>Working days</legend>
+          <label><input type="checkbox" name="weekday" value="mon" checked /> Mon</label>
+          <label><input type="checkbox" name="weekday" value="tue" checked /> Tue</label>
+          <label><input type="checkbox" name="weekday" value="wed" checked /> Wed</label>
+          <label><input type="checkbox" name="weekday" value="thu" checked /> Thu</label>
+          <label><input type="checkbox" name="weekday" value="fri" checked /> Fri</label>
+          <label><input type="checkbox" name="weekday" value="sat" /> Sat</label>
+          <label><input type="checkbox" name="weekday" value="sun" /> Sun</label>
+        </fieldset>
+
+        <button type="submit" class="primary">Find slots</button>
+        <p id="error" class="error" role="alert" hidden></p>
+      </form>
+
+      <section class="panel results" aria-live="polite">
+        <div class="results-head">
+          <h2>Free slots</h2>
+          <span id="summary" class="summary">Nothing searched yet.</span>
+        </div>
+        <div id="output" class="output">
+          <p class="empty">Fill in the window on the left and hit <strong>Find slots</strong>.</p>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

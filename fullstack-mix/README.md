@@ -20,6 +20,9 @@ Mixed projects that combine a front end and a back end. Each project is split in
 - [`expense-split/`](expense-split/) — split shared bills to the last paisa and
   settle up with the fewest payments: a stdlib Python server (SQLite + REST API,
   integer-paise splitting engine) with a vanilla HTML/CSS/JS client.
+- [`slot-finder/`](slot-finder/) — find the first free meeting slots across
+  busy calendars and time zones, with DST-correct working hours: a stdlib Python
+  server (REST API, interval engine) with a vanilla HTML/CSS/JS console.
 
 ## Conventions
 
