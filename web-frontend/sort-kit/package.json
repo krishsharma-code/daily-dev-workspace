@@ -1,0 +1,11 @@
+{
+  "name": "sort-kit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free locale-aware comparators and a stable multi-key sorter with natural ordering and direction-independent blank placement.",
+  "main": "sort-kit.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}

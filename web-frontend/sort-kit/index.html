@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>sort-kit — multi-key, natural and blank-aware table sorting</title>
+  <link rel="stylesheet" href="sort-kit.css" />
+</head>
+<body>
+  <header class="top">
+    <h1>sort-kit</h1>
+    <p>Click a column to sort. <kbd>Shift</kbd>+click adds a secondary key.</p>
+  </header>
+
+  <main>
+    <div class="controls">
+      <label>
+        Sort type for text columns
+        <select id="text-type">
+          <option value="auto">auto (collation)</option>
+          <option value="natural">natural (item9 &lt; item10)</option>
+        </select>
+      </label>
+      <label>
+        Blank cells
+        <select id="nulls">
+          <option value="last">always last</option>
+          <option value="first">always first</option>
+        </select>
+      </label>
+      <button id="reset" type="button">Reset sort</button>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <caption>
+          A staff register with a deliberately messy <em>Salary</em> column
+          (two blanks, one value stored as text) and file-like
+          <em>Ticket</em> references.
+        </caption>
+        <thead>
+          <tr id="head-row"></tr>
+        </thead>
+        <tbody id="body"></tbody>
+      </table>
+    </div>
+
+    <p class="hint">
+      The <em>Salary</em> column is declared as a numeric key, so the text value
+      and the blanks are handled by the comparator instead of by ad-hoc
+      <code>parseFloat</code> calls in the click handler.
+    </p>
+
+    <section class="state">
+      <h2>Comparator in use</h2>
+      <pre id="state">—</pre>
+    </section>
+  </main>
+
+  <script type="module">
+    import { sortBy } from "./sort-kit.js";
+
+    const rows = [
+      { id: "TCK-9", name: "Asha Menon", team: "Platform", salary: 94000, joined: "2021-03-04" },
+      { id: "TCK-10", name: "Bilal Qureshi", team: "Design", salary: 72000, joined: "2019-07-19" },
+      { id: "TCK-100", name: "Chetan Rao", team: "Platform", salary: 121500, joined: "2022-01-10" },
+      { id: "TCK-2", name: "Divya Iyer", team: "Support", salary: null, joined: "2018-11-02" },
+      { id: "TCK-21", name: "Esha Nair", team: "Platform", salary: 94000, joined: "2021-03-04" },
+      { id: "TCK-3", name: "Farhan Ali", team: "Support", salary: "88500", joined: "2020-05-21" },
+      { id: "TCK-30", name: "Gita Pillai", team: "Design", salary: 68000, joined: "2023-02-14" },
+      { id: "TCK-7", name: "Hari Prasad", team: "Support", salary: null, joined: "2017-09-30" },
+    ];
+
+    const columns = [
+      { key: "id", label: "Ticket", type: "natural" },
+      { key: "name", label: "Name", type: "auto" },
+      { key: "team", label: "Team", type: "auto" },
+      { key: "salary", label: "Salary", type: "number", numericClass: true },
+      { key: "joined", label: "Joined", type: "auto" },
+    ];
+
+    const headRow = document.querySelector("#head-row");
+    const body = document.querySelector("#body");
+    const stateBox = document.querySelector("#state");
+    const textType = document.querySelector("#text-type");
+    const nullsSelect = document.querySelector("#nulls");
+    const resetButton = document.querySelector("#reset");
+
+    /** Active sort: an ordered list of { key, direction }. */
+    let active = [{ key: "id", direction: "asc" }];
+
+    const formatSalary = (value) =>
+      value === null || value === undefined
+        ? null
+        : new Intl.NumberFormat("en-IN", {
+            style: "currency",
+            currency: "INR",
+            maximumFractionDigits: 0,
+          }).format(Number(value));
+
+    function textKeyType(column) {
+      if (column.type === "number") return "number";
+      return textType.value === "natural" ? "natural" : "auto";
+    }
+
+    function keysForActive() {
+      return active.map(({ key, direction }) => {
+        const column = columns.find((c) => c.key === key);
+        return { key, direction, type: textKeyType(column), nulls: nullsSelect.value };
+      });
+    }
+
+    function toggle(key, additive) {
+      const existing = active.find((entry) => entry.key === key);
+      if (!additive) {
+        active =
+          existing && active.length === 1 && existing.direction === "asc"
+            ? [{ key, direction: "desc" }]
+            : [{ key, direction: "asc" }];
+        return;
+      }
+      if (!existing) {
+        active = [...active, { key, direction: "asc" }];
+      } else if (existing.direction === "asc") {
+        active = active.map((entry) =>
+          entry.key === key ? { key, direction: "desc" } : entry,
+        );
+      } else {
+        const next = active.filter((entry) => entry.key !== key);
+        active = next.length > 0 ? next : [{ key: "id", direction: "asc" }];
+      }
+    }
+
+    function renderHead() {
+      headRow.replaceChildren(
+        ...columns.map((column) => {
+          const position = active.findIndex((entry) => entry.key === column.key);
+          const th = document.createElement("th");
+          th.scope = "col";
+          if (position !== -1) {
+            th.setAttribute(
+              "aria-sort",
+              active[position].direction === "asc" ? "ascending" : "descending",
+            );
+          }
+
+          const button = document.createElement("button");
+          button.type = "button";
+          button.append(document.createTextNode(column.label));
+
+          const arrow = document.createElement("span");
+          arrow.className = "arrow";
+          arrow.setAttribute("aria-hidden", "true");
+          arrow.textContent =
+            position === -1 ? "↕" : active[position].direction === "asc" ? "↑" : "↓";
+          button.append(arrow);
+
+          if (active.length > 1 && position !== -1) {
+            const priority = document.createElement("span");
+            priority.className = "priority";
+            priority.textContent = String(position + 1);
+            priority.title = `Sort priority ${position + 1}`;
+            button.append(priority);
+          }
+
+          button.addEventListener("click", (event) => {
+            toggle(column.key, event.shiftKey);
+            render();
+          });
+
+          th.append(button);
+          return th;
+        }),
+      );
+    }
+
+    function renderBody(sorted) {
+      body.replaceChildren(
+        ...sorted.map((row) => {
+          const tr = document.createElement("tr");
+          for (const column of columns) {
+            const td = document.createElement("td");
+            const text =
+              column.key === "salary" ? formatSalary(row.salary) : String(row[column.key]);
+            if (text === null) {
+              td.className = "blank";
+              td.textContent = "—";
+            } else {
+              td.textContent = text;
+              if (column.numericClass) td.classList.add("num");
+            }
+            tr.append(td);
+          }
+          return tr;
+        }),
+      );
+    }
+
+    function renderState() {
+      const lines = keysForActive().map(
+        (key) =>
+          `  { key: ${JSON.stringify(key.key)}, direction: ${JSON.stringify(
+            key.direction,
+          )}, type: ${JSON.stringify(key.type)}, nulls: ${JSON.stringify(key.nulls)} },`,
+      );
+      stateBox.textContent = `sortBy(rows, [\n${lines.join("\n")}\n]);`;
+    }
+
+    function render() {
+      const sorted = sortBy(rows, keysForActive());
+      renderHead();
+      renderBody(sorted);
+      renderState();
+    }
+
+    textType.addEventListener("change", render);
+    nullsSelect.addEventListener("change", render);
+    resetButton.addEventListener("click", () => {
+      active = [{ key: "id", direction: "asc" }];
+      textType.value = "auto";
+      nullsSelect.value = "last";
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>
