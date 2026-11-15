@@ -9,6 +9,7 @@ Standalone front-end work: HTML, CSS, and modern JavaScript components and utili
 - [`duration-kit/`](duration-kit/) — ISO 8601 duration parser, formatter, humanised labels and calendar-aware date arithmetic.
 - [`fuzzy-matcher/`](fuzzy-matcher/) — fuzzy subsequence matching and ranking for typeahead search.
 - [`keyboard-shortcuts/`](keyboard-shortcuts/) — shortcut registry with chord/sequence matching, scopes and platform-aware labels.
+- [`sort-kit/`](sort-kit/) — locale-aware comparators and a stable multi-key sorter with natural ordering and direction-independent blank placement.
 - [`storage-kit/`](storage-kit/) — namespaced, TTL-aware store over Web Storage with lazy expiry, quota recovery and safe reads.
 - [`toc-spy/`](toc-spy/) — table of contents generated from headings, with scroll-spy highlighting and accessible anchors.
 - [`undo-stack/`](undo-stack/) — undo/redo history manager with keystroke coalescing and transactions.
