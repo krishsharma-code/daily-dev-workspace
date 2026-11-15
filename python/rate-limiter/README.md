@@ -36,8 +36,11 @@ deterministic and no test ever sleeps in real time.
 
 The window is **half-open**, `(now - window, now]`: an admission exactly
 `window` seconds old has expired and frees its slot. `retry_after()` returns
-the exact instant at which that happens, so `sleep(retry_after(n))` followed by
-`allow(n)` always succeeds.
+the instant at which that happens, so `sleep(retry_after(n))` followed by
+`allow(n)` always succeeds. Because the expiry instant is reached through float
+arithmetic the value is rounded *up* by at most a few ULPs of the clock reading
+— nanoseconds on a real clock — so it is safe to put straight into a
+`Retry-After` header without adding slack of your own.
 
 Pruning is amortised `O(1)` per admission — each timestamp is appended once and
 popped once — but a single `allow()` call may pop up to `limit` expired entries,
@@ -78,6 +81,14 @@ Invalid arguments raise `ValueError`:
   false, so a naive `timeout < 0` check lets it through and the call blocks
   forever instead of timing out.
 
+Numeric types other than `float`/`int` are accepted and converted **once**, at
+the boundary: `Decimal`, `Fraction`, a `numpy` scalar, anything with a working
+`__float__`. Only the converted `float` is used afterwards. Mixing the caller's
+object into the limiter's own arithmetic is what breaks the contract below —
+`Decimal("1")` compares fine against a `float` and then raises `TypeError` on
+`1.0 - Decimal("1")` — so the coercion result is threaded through every call
+rather than the argument the caller passed.
+
 Every rejection is a `ValueError`, never a `TypeError` escaping from an
 internal comparison, so untrusted configuration can be validated with a single
 `except ValueError`.
@@ -104,7 +115,9 @@ python/rate-limiter/
 ├── example.py                # runnable demo
 ├── conftest.py               # makes the module importable in tests
 └── tests/
-    └── test_ratelimiter.py
+    ├── test_ratelimiter.py          # behaviour, validation and error messages
+    ├── test_numeric_coercion.py     # Decimal/Fraction/__float__-only inputs
+    └── test_retry_after_exactness.py # retry_after() really is enough
 ```
 
 ## Run the demo
