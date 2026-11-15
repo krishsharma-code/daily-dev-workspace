@@ -38,6 +38,13 @@ single ``except ValueError``. Text values (``str``/``bytes``) are rejected
 rather than coerced: reading ``LIMIT=100`` from the environment is the caller's
 job, and implicit coercion hides the mistake until traffic arrives.
 
+Numeric types other than ``float``/``int`` -- ``Decimal``, ``Fraction``, a
+``numpy`` scalar, anything with a working ``__float__`` -- are accepted and
+converted **once**, at the boundary, and only the converted ``float`` is used
+from then on. Mixing the caller's object into float arithmetic is what breaks
+the ``ValueError``-only contract: ``Decimal("1")`` compares fine against a
+``float`` and then raises ``TypeError`` on ``1.0 - Decimal("1")``.
+
 ``bool`` is refused too, even though Python treats it as an ``int``: a
 ``limit`` accidentally bound to a feature flag would otherwise quietly mean
 ``1``. Integers too large to represent as a ``float`` (``10 ** 400``) are
@@ -181,11 +188,52 @@ def _require_whole_number(name: str, value: float) -> int:
     return int(number)
 
 
-def _validate_request(tokens: float, upper: float, too_large: str) -> None:
-    """Validate a per-call token count against ``upper``."""
-    _require_number("tokens", tokens)
-    if tokens > upper:
+def _validate_request(tokens: float, upper: float, too_large: str) -> float:
+    """Validate a per-call token count against ``upper`` and return it as a float.
+
+    The **coerced** value is returned on purpose. Validating ``tokens`` and then
+    doing arithmetic on the caller's original object leaks ``TypeError`` out of
+    the trust boundary: ``Decimal("1")`` compares happily against a ``float``
+    (so the check passes) but ``1.0 - Decimal("1")`` raises. Callers must use
+    the returned float for every subsequent comparison and subtraction, which
+    keeps the promise that a bad ``tokens`` argument is always a
+    :class:`ValueError` and never a ``TypeError`` from inside the limiter.
+    """
+    number = _require_number("tokens", tokens)
+    if number > upper:
         raise ValueError(too_large)
+    return number
+
+
+def _wait_until_expiry(now: float, expiry: float, window: float) -> float:
+    """Seconds to wait so that ``(now + wait) - window >= expiry``.
+
+    ``_prune`` frees a slot when ``now - window >= expiry``, so the wait has to
+    be measured with that same expression. The naive answer
+    ``expiry + window - now`` is a difference of two *rounded* quantities --
+    ``expiry + window`` rounds, and ``now + wait`` rounds again -- so it can
+    land a fraction of a ULP short of the expiry instant. The caller then
+    sleeps, prunes, and finds the admission still inside the window, breaking
+    the documented promise that ``sleep(retry_after(n))`` is always enough.
+
+    Padding by a couple of ULPs of the largest magnitude involved (nanoseconds
+    for any realistic clock) fixes the common case; the loop re-checks against
+    the exact predicate and grows the padding when a clock reading is large
+    enough relative to ``window`` that one ULP of the sum is not enough.
+    """
+    wait = max(0.0, expiry + window - now)
+    # ``expiry + window`` and ``now - window`` round differently, so a wait that
+    # computes as ``0.0`` or slightly negative can still leave the admission
+    # inside the window. Start from the clamped value plus a couple of ULPs and
+    # let the loop verify against the predicate ``_prune`` actually uses.
+    slack = max(math.ulp(now), math.ulp(expiry + window), math.ulp(window))
+    candidate = wait + 2.0 * slack
+    for _ in range(4):
+        if (now + candidate) - window >= expiry:
+            return candidate
+        slack *= 16.0
+        candidate = wait + 2.0 * slack
+    return candidate
 
 
 class RateLimitExceeded(Exception):
@@ -275,9 +323,13 @@ class TokenBucket:
         # phantom tokens, and the limiter never over-issues.
 
     @staticmethod
-    def _validate_tokens(tokens: float, capacity: float) -> None:
-        """Reject token requests that are non-finite, non-positive or too large."""
-        _validate_request(
+    def _validate_tokens(tokens: float, capacity: float) -> float:
+        """Reject token requests that are non-finite, non-positive or too large.
+
+        Returns the request as a ``float``; use that value, not the caller's
+        original argument, for the comparisons and subtractions that follow.
+        """
+        return _validate_request(
             tokens,
             capacity,
             "cannot acquire more tokens than the bucket capacity",
@@ -297,7 +349,7 @@ class TokenBucket:
         Returns ``True`` and consumes the tokens on success, or ``False`` and
         changes nothing when the bucket is short.
         """
-        self._validate_tokens(tokens, self.capacity)
+        tokens = self._validate_tokens(tokens, self.capacity)
         self._refill()
         if self._tokens >= tokens:
             self._tokens -= tokens
@@ -306,7 +358,7 @@ class TokenBucket:
 
     def time_until_available(self, tokens: float = 1) -> float:
         """Seconds until ``tokens`` could be acquired (``0.0`` if available now)."""
-        self._validate_tokens(tokens, self.capacity)
+        tokens = self._validate_tokens(tokens, self.capacity)
         self._refill()
         deficit = tokens - self._tokens
         if deficit <= 0:
@@ -334,7 +386,7 @@ class TokenBucket:
         # ``tokens > self.capacity`` comparison: that comparison lets ``nan``
         # through (every comparison with nan is false) and raises ``TypeError``
         # for non-numeric input.
-        self._validate_tokens(tokens, self.capacity)
+        tokens = self._validate_tokens(tokens, self.capacity)
         if timeout is not None:
             # ``None`` means "wait forever"; every other value goes through the
             # same ladder as the rest of the numbers, so ``timeout="1"``,
@@ -454,8 +506,12 @@ class SlidingWindowCounter:
         web handler needs to populate a ``Retry-After`` header without
         reimplementing the window arithmetic.
 
-        The result is exact for the half-open window: sleeping for it and then
-        calling :meth:`allow` with the same ``tokens`` succeeds.
+        The result satisfies the half-open window exactly: sleeping for it and
+        then calling :meth:`allow` with the same ``tokens`` succeeds. Because
+        the expiry instant is reached through float arithmetic, the value is
+        rounded *up* by at most a few ULPs of the clock reading -- nanoseconds
+        on a real clock -- so it is safe to use directly as a
+        ``Retry-After`` value without adding your own slack.
         """
         tokens = _require_whole_number("tokens", tokens)
         if tokens > self.limit:
@@ -467,8 +523,10 @@ class SlidingWindowCounter:
             return 0.0
         # ``deficit`` slots must free up, so the ``deficit``-th oldest
         # admission has to age out; it expires exactly ``window`` seconds
-        # after it was recorded.
-        return max(0.0, self._events[deficit - 1] + self.window - now)
+        # after it was recorded. ``_wait_until_expiry`` rounds *up* to the
+        # first wait that actually satisfies ``_prune``, so the result is
+        # usable as a ``Retry-After`` value without adding slack by hand.
+        return _wait_until_expiry(now, self._events[deficit - 1], self.window)
 
     def remaining(self) -> int:
         """How many admissions are still available in the current window."""
