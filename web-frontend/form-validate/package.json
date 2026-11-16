@@ -1,0 +1,14 @@
+{
+  "name": "form-validate",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Declarative, dependency-free form validation with structured errors.",
+  "main": "form-validate.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>form-validate — live signup form</title>
+    <link rel="stylesheet" href="form-validate.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="page__head">
+        <h1>form-validate</h1>
+        <p class="lede">
+          One schema, structured errors. Fields validate on blur and on submit; the
+          handle check is async and only runs through <code>validateFieldAsync</code>.
+        </p>
+      </header>
+
+      <div class="grid">
+        <form id="signup" class="card" novalidate>
+          <div class="field">
+            <label for="fullName">Full name</label>
+            <input id="fullName" name="fullName" autocomplete="name" placeholder="Asha Menon" />
+            <p class="error" data-error-for="fullName"></p>
+          </div>
+
+          <div class="field">
+            <label for="email">Work email</label>
+            <input id="email" name="email" type="email" autocomplete="email" placeholder="asha@example.com" />
+            <p class="error" data-error-for="email"></p>
+          </div>
+
+          <div class="field">
+            <label for="handle">Handle</label>
+            <input id="handle" name="handle" placeholder="asha" />
+            <p class="hint">Checked against a fake registry — <code>admin</code>, <code>root</code> and <code>support</code> are taken.</p>
+            <p class="error" data-error-for="handle"></p>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label for="password">Password</label>
+              <input id="password" name="password" type="password" autocomplete="new-password" />
+              <p class="error" data-error-for="password"></p>
+            </div>
+            <div class="field">
+              <label for="confirmPassword">Confirm password</label>
+              <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" />
+              <p class="error" data-error-for="confirmPassword"></p>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label for="age">Age</label>
+              <input id="age" name="age" inputmode="numeric" placeholder="24" />
+              <p class="error" data-error-for="age"></p>
+            </div>
+            <div class="field">
+              <label for="plan">Plan</label>
+              <select id="plan" name="plan">
+                <option value="">Choose a plan…</option>
+                <option value="free">Free</option>
+                <option value="pro">Pro</option>
+                <option value="team">Team</option>
+              </select>
+              <p class="error" data-error-for="plan"></p>
+            </div>
+          </div>
+
+          <div class="field field--check">
+            <label class="check">
+              <input id="terms" name="terms" type="checkbox" />
+              <span>I accept the terms of service</span>
+            </label>
+            <p class="error" data-error-for="terms"></p>
+          </div>
+
+          <div class="actions">
+            <button type="submit" id="submit">Create account</button>
+            <button type="reset" class="ghost">Reset</button>
+          </div>
+        </form>
+
+        <aside class="card card--output" aria-live="polite">
+          <h2>Last result</h2>
+          <p id="status" class="status">Submit the form to see the validator's output.</p>
+          <pre id="output" class="output">{}</pre>
+        </aside>
+      </div>
+    </main>
+
+    <script type="module">
+      import { createValidator } from "./form-validate.js";
+
+      const TAKEN = new Set(["admin", "root", "support"]);
+
+      const form = createValidator(
+        {
+          fullName: ["required", { rule: "minLength", value: 2 }],
+          email: ["required", "email"],
+          handle: [
+            { rule: "required" },
+            { rule: "minLength", value: 3 },
+            { rule: "pattern", value: /^[a-z0-9_]+$/, message: "{label} may only use lowercase letters, digits and underscores." },
+            {
+              code: "taken",
+              // Async: the validator waits for this in validateAsync/validateFieldAsync.
+              test: async (value) => {
+                await new Promise((resolve) => setTimeout(resolve, 120));
+                return !TAKEN.has(String(value));
+              },
+              message: "That {label} is already taken.",
+            },
+          ],
+          password: [
+            { rule: "minLength", value: 8 },
+            { rule: "pattern", value: /[A-Z]/, code: "uppercase", message: "{label} needs at least one capital letter." },
+            { rule: "pattern", value: /\d/, code: "digit", message: "{label} needs at least one digit." },
+          ],
+          confirmPassword: [{ rule: "matchesField", field: "password" }],
+          age: [
+            { rule: "integer" },
+            { rule: "min", value: 18, message: "You must be {value} or older." },
+            { rule: "max", value: 120 },
+          ],
+          plan: ["required", { rule: "oneOf", value: ["free", "pro", "team"], message: "Pick a plan." }],
+          terms: [{ rule: "required", message: "Please accept the terms." }],
+        },
+        { labels: { fullName: "Full name", terms: "Terms acceptance" } },
+      );
+
+      const formEl = document.getElementById("signup");
+      const statusEl = document.getElementById("status");
+      const outputEl = document.getElementById("output");
+
+      const valuesOf = () => {
+        const data = new FormData(formEl);
+        return {
+          fullName: data.get("fullName") ?? "",
+          email: data.get("email") ?? "",
+          handle: data.get("handle") ?? "",
+          password: data.get("password") ?? "",
+          confirmPassword: data.get("confirmPassword") ?? "",
+          age: data.get("age") ?? "",
+          plan: data.get("plan") ?? "",
+          terms: formEl.elements.terms.checked,
+        };
+      };
+
+      function paint(field, errors) {
+        const slot = document.querySelector(`[data-error-for="${field}"]`);
+        const input = formEl.elements[field];
+        const message = errors.length ? errors.map((error) => error.message).join(" ") : "";
+        if (slot) slot.textContent = message;
+        if (input) {
+          input.setAttribute("aria-invalid", errors.length ? "true" : "false");
+          input.closest(".field")?.classList.toggle("has-error", errors.length > 0);
+        }
+      }
+
+      function paintAll(result) {
+        for (const field of form.fields) paint(field, result.errors[field] ?? []);
+      }
+
+      async function checkField(field) {
+        const values = valuesOf();
+        const result = await form.validateFieldAsync(field, values);
+        paint(field, result.errors);
+        // Confirm-password depends on password, so refresh it too.
+        if (field === "password") {
+          const confirm = await form.validateFieldAsync("confirmPassword", values);
+          paint("confirmPassword", confirm.errors);
+        }
+        return result.valid;
+      }
+
+      formEl.addEventListener("blur", async (event) => {
+        const field = event.target?.name;
+        if (field && form.hasField(field)) await checkField(field);
+      }, true);
+
+      formEl.addEventListener("change", async (event) => {
+        const field = event.target?.name;
+        if (field && form.hasField(field)) await checkField(field);
+      });
+
+      formEl.addEventListener("reset", () => {
+        for (const field of form.fields) paint(field, []);
+        statusEl.textContent = "Form reset. Nothing validated yet.";
+        statusEl.className = "status";
+        outputEl.textContent = "{}";
+      });
+
+      formEl.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const values = valuesOf();
+        const result = await form.validateAsync(values);
+        paintAll(result);
+
+        statusEl.textContent = result.valid
+          ? "Valid — the form would submit here."
+          : `${result.list.length} problem${result.list.length === 1 ? "" : "s"} found.`;
+        statusEl.className = `status ${result.valid ? "status--ok" : "status--bad"}`;
+        outputEl.textContent = JSON.stringify(
+          {
+            valid: result.valid,
+            errors: result.list.map(({ field, code, message }) => ({ field, code, message })),
+          },
+          null,
+          2,
+        );
+
+        if (result.valid) {
+          // The validator never mutates input; trim at the boundary if you store it.
+          console.log("would submit", Object.fromEntries(
+            Object.entries(values).map(([key, value]) => [key, typeof value === "string" ? value.trim() : value]),
+          ));
+        } else {
+          formEl.querySelector('[aria-invalid="true"]')?.focus();
+        }
+      });
+    </script>
+  </body>
+</html>
