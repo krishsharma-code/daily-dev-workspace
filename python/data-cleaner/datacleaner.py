@@ -32,6 +32,9 @@ the rules are deliberately conservative:
   email or a phone number becomes ``None`` instead of a best-effort guess, so
   bad data surfaces in the cleaned output rather than as a plausible-looking
   wrong value;
+- a sign is not a separator: ``normalize_phone`` rejects a leading ``-`` in
+  either the ``int`` or the ``str`` branch, and ``to_number`` keeps a negative
+  number negative rather than dropping the sign;
 - no helper executes, evaluates, imports or shells out on the data, and none
   touches the network or the filesystem;
 - no helper mutates its input; every one returns a new value;
@@ -89,9 +92,16 @@ _NUMBER_NOISE_RE = re.compile(r"[,\s\u20b9$€£]")
 #: grouped integer (``1,234`` / ``1 234``) or a plain decimal (``12``, ``12.5``,
 #: ``.5``), then an optional exponent. Anything else -- ``12$34``, ``1,2,3``,
 #: ``1_000`` -- is rejected rather than quietly turned into a different number.
+#:
+#: The backreference on the group separator is load-bearing: without it
+#: ``1,234 567`` and ``1 234,567`` both matched and were silently coerced to
+#: ``1234567``. Mixing a comma and a space inside one number is a corrupt cell
+#: (a locale mismatch between two exporters), not a value worth guessing at, so
+#: the separator must now be the same throughout the integer part.
 _NUMBER_GRAMMAR_RE = re.compile(
     r"^\s*[+-]?(?:[\u20b9$€£]\s?)?"
-    r"(?:\d{1,3}(?:[,\s]\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)"
+    r"(?:\d{1,3}(?P<sep>[,\s])\d{3}(?:(?P=sep)\d{3})*(?:\.\d+)?"
+    r"|\d+(?:\.\d+)?|\.\d+)"
     r"(?:[eE][+-]?\d+)?\s*$"
 )
 #: An ITU-T E.164 country calling code is one to three digits.
@@ -109,6 +119,16 @@ def normalize_whitespace(value: Any) -> Any:
     return _WHITESPACE_RE.sub(" ", value).strip()
 
 
+class _NormalizedTokens(frozenset):
+    """A ``frozenset`` of missing tokens that is already normalised.
+
+    The distinct type is what makes :func:`_normalized_tokens` idempotent
+    without trusting arbitrary input: a caller may hand us any ``frozenset``
+    (``frozenset({"N/A"})`` is *not* normalised), so only instances of this
+    class -- which we built ourselves -- are passed straight through.
+    """
+
+
 def _normalized_tokens(missing_tokens: Iterable[str]) -> frozenset[str]:
     """Return *missing_tokens* whitespace-normalised and casefolded.
 
@@ -118,10 +138,20 @@ def _normalized_tokens(missing_tokens: Iterable[str]) -> frozenset[str]:
     it the comparison would be case-sensitive in one direction only and the
     caller's tokens would silently never match. Non-string tokens are dropped:
     only a string value can ever be compared against them.
+
+    The conversion is idempotent: feeding a result back in returns it unchanged.
+    That matters for two reasons. It lets the batch entry points (``clean_record``,
+    ``clean_records``, ``missing_required``) normalise once and pass the result
+    down instead of rebuilding a set per cell, and it makes a one-shot iterable
+    of tokens safe: the iterator is drained on the first call, so a second call
+    over the same exhausted object used to return an *empty* set and stop
+    treating anything as missing.
     """
     if missing_tokens is DEFAULT_MISSING_TOKENS:
         return DEFAULT_MISSING_TOKENS
-    return frozenset(
+    if isinstance(missing_tokens, _NormalizedTokens):
+        return missing_tokens
+    return _NormalizedTokens(
         normalize_whitespace(token).casefold()
         for token in missing_tokens
         if isinstance(token, str)
@@ -157,6 +187,11 @@ def to_number(value: Any) -> int | float | None:
     Handles plain numbers, numeric strings with thousands separators or a
     leading currency symbol (``"1,234"`` -> ``1234``, ``"\u20b91,200"`` -> ``1200``),
     and integral floats (``"12.0"`` -> ``12``).
+
+    A number must use a single thousands separator throughout: ``"1,234,567"``
+    and ``"1 234 567"`` parse, while ``"1,234 567"`` returns ``None``. A cell
+    that mixes commas and spaces is two locale conventions in one value, which
+    is a corrupt export rather than something worth guessing at.
 
     Non-finite values are rejected rather than passed through: ``float("nan")``,
     ``float("inf")`` and their string spellings (``"nan"``, ``"inf"``,
@@ -204,6 +239,11 @@ def normalize_phone(value: Any, country_code: str = "91") -> str | None:
     10 digits (the common length in India); anything else returns ``None`` so
     bad data is surfaced rather than silently mangled.
 
+    A leading minus is rejected in both branches: ``"-9876543210"`` returns
+    ``None`` just as ``-9876543210`` does. Dropping the sign would have turned a
+    negative value into a valid-looking number, and the ``int`` branch already
+    rejected it, so the two spellings must not disagree.
+
     ``country_code`` is accepted as ``"91"``, ``"+91"`` or the integer ``91``
     and must hold one to three digits (the E.164 range); anything else raises
     :class:`ValueError`. That is a malformed
@@ -227,6 +267,13 @@ def normalize_phone(value: Any, country_code: str = "91") -> str | None:
     if isinstance(value, int):
         digits = str(value)
     elif isinstance(value, str):
+        # A leading minus is a sign, not a separator: stripping it turned
+        # "-9876543210" into a perfectly valid number, while the same value as
+        # an ``int`` was rejected (the sign kept its length at 11). Reject both
+        # spellings of a negative so the two branches agree. Interior dashes
+        # ("98765-43210") are still treated as separators.
+        if value.strip().startswith("-"):
+            return None
         digits = _NON_DIGIT_RE.sub("", value)
     else:
         return None
@@ -279,6 +326,10 @@ def clean_record(
     loop. Transformer keys that the record does not contain are ignored.
     """
     transformers = transformers or {}
+    # Normalise the tokens once for the whole record. ``is_missing`` is called
+    # per field, and an exhausted generator of tokens would leave every field
+    # after the first comparing against an empty set.
+    tokens = _normalized_tokens(missing_tokens)
     for field, transformer in transformers.items():
         if not callable(transformer):
             raise TypeError(
@@ -287,7 +338,7 @@ def clean_record(
     cleaned: dict[str, Any] = {}
     for field, raw in record.items():
         value = normalize_whitespace(raw)
-        if is_missing(value, missing_tokens):
+        if is_missing(value, tokens):
             value = None
         elif field in transformers:
             value = transformers[field](value)
@@ -307,11 +358,12 @@ def clean_records(
     With ``drop_empty`` (the default), records whose every field is missing are
     discarded. Order is preserved.
     """
+    # Hoist the token normalisation out of the per-record loop: a one-shot
+    # iterable of tokens must not be drained by the first record.
+    tokens = _normalized_tokens(missing_tokens)
     out: list[dict[str, Any]] = []
     for record in records:
-        cleaned = clean_record(
-            record, missing_tokens=missing_tokens, transformers=transformers
-        )
+        cleaned = clean_record(record, missing_tokens=tokens, transformers=transformers)
         if drop_empty and all(value is None for value in cleaned.values()):
             continue
         out.append(cleaned)
@@ -340,6 +392,10 @@ def _freeze(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         # Sequences are ordered by definition, so their order is preserved.
         return tuple(_freeze(v) for v in value)
+    if isinstance(value, (bytearray, memoryview)):
+        # ``bytes`` is hashable and equal to the same byte content, so a binary
+        # column dedupes instead of raising ``TypeError: unhashable type``.
+        return bytes(value)
     return value
 
 
@@ -390,4 +446,5 @@ def missing_required(
     value matches *missing_tokens* -- the same tokens :func:`clean_record` uses
     by default -- so the two helpers agree on what "empty" means.
     """
-    return [field for field in required if is_missing(record.get(field), missing_tokens)]
+    tokens = _normalized_tokens(missing_tokens)
+    return [field for field in required if is_missing(record.get(field), tokens)]
