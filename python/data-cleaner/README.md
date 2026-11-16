@@ -11,8 +11,8 @@ so a cleaning pipeline stays easy to reason about and to test.
 | --- | --- |
 | `normalize_whitespace(value)` | Trim and collapse internal runs of whitespace. |
 | `is_missing(value)` | Treat `None`, `""`, `"N/A"`, `"null"`, `"-"`, … as absent. |
-| `to_number(value)` | Coerce to a finite `int`/`float`, handling `"1,234"`, `"₹1,200"`, `"12.0"`. Non-finite values (`nan`, `inf`, `"1e400"`) return `None`. |
-| `normalize_phone(value)` | Normalise Indian numbers to `+91XXXXXXXXXX`. |
+| `to_number(value)` | Coerce to a finite `int`/`float`, handling `"1,234"`, `"₹1,200"`, `"12.0"`. Non-finite values (`nan`, `inf`, `"1e400"`) return `None`. A number must use one separator style throughout. |
+| `normalize_phone(value)` | Normalise Indian numbers to `+91XXXXXXXXXX`; a negative value returns `None`. |
 | `normalize_email(value)` | Trim, lower-case, and validate an address. |
 | `clean_record(record, ...)` | Clean one record, with optional per-field transformers. |
 | `clean_records(records, ...)` | Clean a batch, optionally dropping all-empty rows. |
@@ -28,8 +28,9 @@ python/data-cleaner/
 ├── example.py                # runnable demo
 ├── conftest.py               # makes the module importable in tests
 └── tests/
-    ├── test_datacleaner.py   # the public API, value by value
-    └── test_robustness.py    # regression tests for the edge cases below
+    ├── test_datacleaner.py         # the public API, value by value
+    ├── test_robustness.py          # regression tests for the edge cases below
+    └── test_audit_regressions.py   # one test per defect closed by the audit
 ```
 
 ## Run the demo
@@ -80,14 +81,23 @@ every field ended up empty.
   groups of three, so `"1,234"`, `"1 234"`, `"₹1,200"` and `".5"` all parse,
   while `"12$34"`, `"1,2,3"`, `"4 5 6"` and `"1_000"` return `None` instead of
   quietly becoming a different number.
+- The separator must be the *same* one throughout the integer part: `"1,234,567"`
+  and `"1 234 567"` parse, but `"1,234 567"` and `"1 234,567"` return `None`. A
+  number that mixes commas and spaces is two locale conventions in one cell — a
+  corrupt export rather than a value worth guessing at.
 - `is_missing` treats a non-finite float (`nan`, `inf`) as missing, matching
   `to_number`, so `clean_record` and `missing_required` agree about a cell.
   Custom `missing_tokens` are normalised the same way the value is, so
-  `missing_tokens={"N/A"}` matches `"n/a"`.
+  `missing_tokens={"N/A"}` matches `"n/a"`. Any iterable of tokens is accepted,
+  including a generator: `clean_record`, `clean_records` and `missing_required`
+  materialise it once and reuse the result for every field and every record,
+  so a one-shot iterator cannot leave later cells unclassified.
 - `dedupe_records` compares whole records order-independently and never raises on
   mixed-type or non-comparable keys; it keys nested structures by `str(key)` and
-  compares sets by membership, not by iteration order. It holds one frozen key
-  per distinct record, so memory is O(distinct records).
+  compares sets by membership, not by iteration order. Binary values
+  (`bytearray`, `memoryview`) are frozen to `bytes` so a payload column dedupes
+  instead of raising `TypeError: unhashable type`. It holds one frozen key per
+  distinct record, so memory is O(distinct records).
 
 ## Argument errors vs bad data
 
@@ -114,5 +124,8 @@ rows.
   keep a significant leading zero in the national number, such as Italy's, are
   not supported: the trunk `0` and a significant `0` are indistinguishable
   without a numbering-plan database.
+- `normalize_phone` rejects a leading minus (`"-9876543210"` and `-9876543210`
+  both return `None`), treating a sign as bad data rather than as a separator.
+  Interior dashes (`"98765-43210"`) remain separators.
 - `normalize_email` is a shape check (one `@`, a dotted domain), not an RFC 5322
   parser.
