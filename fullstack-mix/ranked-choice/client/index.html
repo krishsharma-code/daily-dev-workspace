@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ranked Choice</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <h1>Ranked Choice</h1>
+      <p class="tagline">
+        Paste ranked ballots and watch instant-runoff voting count them round by
+        round — transfers, exhausted ballots, tie-breaks and the head-to-head
+        result, all on your machine.
+      </p>
+    </header>
+
+    <main class="layout">
+      <form id="rcv-form" class="panel" novalidate>
+        <div class="field">
+          <label for="ballots">
+            Ballots
+            <span class="hint">one per line, most preferred first, separated by <code>&gt;</code> or <code>,</code></span>
+          </label>
+          <textarea
+            id="ballots"
+            name="ballots"
+            rows="12"
+            spellcheck="false"
+            placeholder="Aditi > Bharat > Chen"
+          ></textarea>
+          <div class="row-actions">
+            <button type="button" id="load-example" class="ghost">Load example</button>
+            <button type="button" id="clear-ballots" class="ghost">Clear</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="candidates">
+            Candidates
+            <span class="hint">optional — leave blank to take names from the ballots</span>
+          </label>
+          <input
+            id="candidates"
+            name="candidates"
+            spellcheck="false"
+            placeholder="Bengaluru, Goa, Jaipur, Kochi"
+          />
+        </div>
+
+        <div class="row-actions">
+          <button type="submit" id="count-button">Count the vote</button>
+          <span id="status" class="status" role="status" aria-live="polite"></span>
+        </div>
+
+        <p class="note">
+          Prefix a line with <code>3:</code> to count it three times. Lines
+          starting with <code>#</code> are ignored.
+        </p>
+
+        <div id="error" class="error" role="alert" hidden></div>
+      </form>
+
+      <section id="output" class="results" aria-live="polite">
+        <p class="placeholder">
+          Results appear here. Start with <strong>Load example</strong> if you
+          just want to see how a count unfolds.
+        </p>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
