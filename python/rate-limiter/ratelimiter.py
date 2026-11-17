@@ -69,6 +69,25 @@ an admission exactly ``window`` seconds old has expired and frees its slot.
 :meth:`SlidingWindowCounter.retry_after` reports the exact instant at which
 that happens.
 
+Clock contract
+--------------
+The injected ``clock`` must be **non-decreasing**. :func:`time.monotonic` is
+and is the default; ``time.time`` is not, because an NTP step or a manual
+clock change can move it backwards.
+
+Both limiters stay safe -- they never over-admit -- when a clock does step
+backwards:
+
+- :class:`TokenBucket` refuses to credit tokens for a negative interval,
+  leaving ``_last`` where it is, so a jump back grants no phantom tokens.
+- :class:`SlidingWindowCounter` keeps whatever it admitted and simply stops
+  pruning until the clock returns to where it was, so nothing expires early.
+  The one thing a backwards step *does* change is ordering: ``_events`` is a
+  FIFO in arrival order, not in timestamp order, once readings can go
+  backwards. :meth:`SlidingWindowCounter.retry_after` therefore takes the
+  largest timestamp among the admissions that have to expire rather than
+  trusting position alone.
+
 Concurrency
 -----------
 These limiters are **not thread-safe**. Each keeps mutable state -- the token
@@ -96,7 +115,7 @@ from __future__ import annotations
 import math
 import time
 from collections import deque
-from itertools import repeat
+from itertools import islice, repeat
 from typing import Callable, Optional
 
 __all__ = [
@@ -399,7 +418,10 @@ class TokenBucket:
         stalled = 0
         while True:
             if self.try_acquire(tokens):
-                return self._clock() - start
+                # Clamped at zero: a clock that steps backwards mid-call would
+                # otherwise make "seconds waited" negative, which callers feed
+                # straight into metrics and backoff calculations.
+                return max(0.0, self._clock() - start)
             wait = self.time_until_available(tokens)
             if deadline is not None and self._clock() + wait > deadline:
                 raise RateLimitExceeded(
@@ -450,7 +472,13 @@ class SlidingWindowCounter:
         Window length in seconds (finite, ``> 0``).
     clock:
         Callable returning the current time in seconds. Defaults to
-        :func:`time.monotonic`.
+        :func:`time.monotonic`. It must be non-decreasing; see the module's
+        clock contract.
+
+    Because one timestamp is kept per admitted request, ``limit`` is a memory
+    bound as well as an admission bound: ``limit=10 ** 6`` is a million
+    floats. Keep it to the size of a realistic burst, and enforce a ceiling in
+    whatever parses the value from config or a request.
     """
 
     def __init__(
@@ -468,7 +496,16 @@ class SlidingWindowCounter:
     # -- internals ---------------------------------------------------------
 
     def _prune(self, now: float) -> None:
-        """Drop admissions that have aged out of the window."""
+        """Drop admissions that have aged out of the window.
+
+        Pops from the left while the oldest admission is outside the half-open
+        window, using the same predicate :meth:`retry_after` targets
+        (``now - window >= expiry``). Only the front of the deque is
+        considered, so after a backwards clock step -- when ``_events`` is no
+        longer sorted -- stale entries behind a newer one survive a little
+        longer than strictly necessary. That direction is the safe one: it can
+        hold a request back, never let an extra one through.
+        """
         cutoff = now - self.window
         events = self._events
         while events and events[0] <= cutoff:
@@ -521,12 +558,18 @@ class SlidingWindowCounter:
         deficit = len(self._events) + tokens - self.limit
         if deficit <= 0:
             return 0.0
-        # ``deficit`` slots must free up, so the ``deficit``-th oldest
-        # admission has to age out; it expires exactly ``window`` seconds
-        # after it was recorded. ``_wait_until_expiry`` rounds *up* to the
+        # ``deficit`` slots must free up, and ``_prune`` frees them by popping
+        # the first ``deficit`` entries of the deque. Taking the largest
+        # timestamp among those entries -- not simply ``events[deficit - 1]``
+        # -- is what keeps the promise when the deque is not sorted: after a
+        # backwards clock step an earlier entry can carry a later timestamp,
+        # and position alone then names the wrong expiry. ``islice`` walks the
+        # prefix without copying it, so the extra cost stays ``O(deficit)``
+        # time and ``O(1)`` memory. ``_wait_until_expiry`` rounds *up* to the
         # first wait that actually satisfies ``_prune``, so the result is
         # usable as a ``Retry-After`` value without adding slack by hand.
-        return _wait_until_expiry(now, self._events[deficit - 1], self.window)
+        expiry = max(islice(self._events, deficit))
+        return _wait_until_expiry(now, expiry, self.window)
 
     def remaining(self) -> int:
         """How many admissions are still available in the current window."""
