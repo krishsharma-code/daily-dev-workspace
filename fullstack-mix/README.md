@@ -23,6 +23,10 @@ Mixed projects that combine a front end and a back end. Each project is split in
 - [`slot-finder/`](slot-finder/) — find the first free meeting slots across
   busy calendars and time zones, with DST-correct working hours: a stdlib Python
   server (REST API, interval engine) with a vanilla HTML/CSS/JS console.
+- [`ranked-choice/`](ranked-choice/) — count ranked ballots under
+  instant-runoff voting, round by round, with exhausted ballots, disclosed
+  tie-breaks and a head-to-head (Condorcet) cross-check: a stdlib Python server
+  (REST API, tabulation engine) with a vanilla HTML/CSS/JS console.
 
 ## Conventions
 
