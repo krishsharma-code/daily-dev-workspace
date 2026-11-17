@@ -44,7 +44,10 @@ arithmetic the value is rounded *up* by at most a few ULPs of the clock reading
 
 Pruning is amortised `O(1)` per admission — each timestamp is appended once and
 popped once — but a single `allow()` call may pop up to `limit` expired entries,
-so one call costs `O(limit)` in the worst case.
+so one call costs `O(limit)` in the worst case. Because one timestamp is kept
+per admitted request, `limit` is a memory bound as well as an admission bound —
+`limit=10 ** 6` is a million floats — so enforce a ceiling wherever the value is
+parsed from config or a request.
 
 `RateLimitExceeded` exposes the same facts as numbers, not only as prose:
 `retry_after` is the wait the call would have needed and `requested` is the
@@ -98,6 +101,26 @@ Non-finite parameters are rejected deliberately rather than tolerated: a
 yields a counter that never expires, so both fail fast at construction instead
 of at the first request.
 
+## Clock contract
+
+`clock` must be **non-decreasing**. `time.monotonic` is, and is the default;
+`time.time` is not, because an NTP correction or a manual clock change can move
+it backwards. Both limiters stay safe — neither can over-admit — if you inject a
+clock that steps back, but it is worth knowing what changes:
+
+- `TokenBucket` refuses to credit tokens for a negative interval and leaves its
+  last-refill timestamp where it was, so a jump back grants no phantom tokens.
+- `SlidingWindowCounter` keeps the admissions it already recorded and stops
+  pruning until the clock returns to where it was, so nothing expires early. The
+  one thing that does change is ordering: the events deque is a FIFO in arrival
+  order, which is no longer timestamp order once readings can go backwards.
+  `retry_after()` therefore takes the largest timestamp among the admissions that
+  have to expire rather than trusting position alone, so the wait it returns is
+  still enough.
+
+`acquire()` also clamps its return value at zero: a clock that steps back
+mid-call would otherwise make "seconds waited" negative.
+
 ## Concurrency
 
 The limiters are **not thread-safe**. Each mutates its own state (the token
@@ -117,7 +140,8 @@ python/rate-limiter/
 └── tests/
     ├── test_ratelimiter.py          # behaviour, validation and error messages
     ├── test_numeric_coercion.py     # Decimal/Fraction/__float__-only inputs
-    └── test_retry_after_exactness.py # retry_after() really is enough
+    ├── test_retry_after_exactness.py # retry_after() really is enough
+    └── test_clock_monotonicity.py   # a clock that steps backwards stays safe
 ```
 
 ## Run the demo
