@@ -28,7 +28,8 @@ if plan.truncated:
 | `RetryPlanner(policy=None, *, rng=None)` | Computes delays and schedules. Pass `random.Random(seed)` for reproducible jitter. |
 | `planner.nominal(attempt)` | The un-jittered delay for a 1-based attempt, capped. |
 | `planner.delay_for(attempt, *, previous=None)` | The delay after jitter. `previous` is only needed by `"decorrelated"`. |
-| `planner.plan(max_attempts=5, *, deadline=None, retry_after=None)` | A `Schedule` for the whole retry sequence. |
+| `planner.plan(max_attempts=5, *, deadline=None, retry_after=None)` | A `Schedule` for the whole retry sequence. `max_attempts` is capped at `MAX_ATTEMPTS`. |
+| `MAX_ATTEMPTS` | The ceiling on `plan(max_attempts=...)` (10,000). |
 | `Schedule` | `.delays`, `.total`, `.cumulative()`, `.truncated`, `len()`, iteration. |
 | `parse_retry_after(value, *, now=None)` | Header value (delta-seconds, HTTP-date) or `datetime` → seconds, floored at 0. |
 | `is_retryable_status(status)` | True for `408, 425, 429, 500, 502, 503, 504`. |
@@ -36,7 +37,15 @@ if plan.truncated:
 Everything invalid raises `BackoffError`, a `ValueError` subclass: a negative
 base, `factor < 1`, `cap < base`, an unknown jitter mode, `attempt=0` (attempts
 are 1-based), `NaN`/`inf` anywhere, a `bool` where a number belongs, a status
-outside 100–599, or a header that is neither delta-seconds nor an HTTP-date.
+outside 100–599, a `now` that is not a `datetime`, or a header that is neither
+delta-seconds nor an HTTP-date. Nothing leaks out as `TypeError`,
+`OverflowError` or `AttributeError`.
+
+`max_attempts` is caller-supplied and the schedule is materialised as a list,
+so it has a ceiling: `MAX_ATTEMPTS` (10,000). Anything above that raises
+`BackoffError` instead of allocating. Ten thousand capped retries is already
+around 83 hours of waiting — past the point where a caller should have given
+up.
 
 ## Jitter
 
@@ -90,8 +99,9 @@ A date in the past returns `0.0`, not a negative sleep. A naive `datetime` or
 raises: `"soon"`, `"-5"`, `"+5"`, `"5s"`, `"1.5"`, and — importantly —
 `"١٢٠"`. That last one is Arabic-Indic digits, which `str.isdigit()` accepts
 and `int()` would quietly turn into 120; the parser matches the RFC grammar
-(ASCII `[0-9]+`) instead. A delta-seconds value with more than nine digits is
-rejected rather than becoming an infinite sleep.
+(ASCII `[0-9]+`) instead. A delta-seconds value with more than nine *significant*
+digits is rejected rather than becoming an infinite sleep — but leading zeros
+are free, so `"0000000120"` is 120 seconds, exactly as RFC 9110 spells it.
 
 ## Status classification
 
@@ -125,7 +135,8 @@ python/backoff-planner/
 ├── example.py                    # runnable demo
 ├── conftest.py                   # makes the module importable in tests
 └── tests/
-    └── test_backoff_planner.py
+    ├── test_backoff_planner.py              # the design
+    └── test_backoff_planner_regressions.py  # the audit boundaries
 ```
 
 ## Run the demo
@@ -147,12 +158,16 @@ cd python/backoff-planner
 python -m pytest
 ```
 
-114 tests: the curve (including a 10,000th attempt that would otherwise
+136 tests: the curve (including a 10,000th attempt that would otherwise
 overflow a float power), every validation path, all four jitter modes against
 their bounds, deadline arithmetic at the boundary, `Retry-After` in every
 accepted and rejected shape, status classification, and a seeded randomised
 check that no policy/jitter/deadline combination ever schedules more waiting
 than the budget allows. `pytest` is needed only to run the suite.
+
+`tests/test_backoff_planner_regressions.py` pins the boundaries that were wrong
+before the audit: zero-padded delta-seconds, an `attempt` too large to convert
+to a float, an unvalidated `now`, and the missing ceiling on `max_attempts`.
 
 ## Example
 

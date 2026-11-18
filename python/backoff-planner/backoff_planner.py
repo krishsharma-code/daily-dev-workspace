@@ -27,6 +27,7 @@ from typing import Optional, Tuple, Union
 
 __all__ = [
     "BackoffError",
+    "MAX_ATTEMPTS",
     "RETRYABLE_STATUS",
     "RetryPlanner",
     "RetryPolicy",
@@ -46,6 +47,16 @@ _DELTA_SECONDS = re.compile(r"[0-9]+\Z")
 
 # float exponents above this overflow a double; the cap applies long before.
 _MAX_EXPONENT = 700.0
+
+#: Significant digits allowed in a delta-seconds value. The bound is on the
+#: *value*, not on the width of the string, so leading zeros are free: RFC 9110
+#: spells delta-seconds as ``1*DIGIT`` and ``"0000000120"`` is simply 120.
+_MAX_DELTA_DIGITS = 9
+
+#: Ceiling on ``RetryPlanner.plan(max_attempts=...)``. ``plan`` materialises the
+#: whole schedule as a list, so an unbounded argument is an unbounded
+#: allocation; 10,000 capped retries is already ~83 hours of waiting.
+MAX_ATTEMPTS = 10_000
 
 
 class BackoffError(ValueError):
@@ -129,7 +140,13 @@ class Schedule:
         return math.fsum(self.delays)
 
     def cumulative(self) -> Tuple[float, ...]:
-        """Running total after each delay, handy for a progress log."""
+        """Running total after each delay, handy for a progress log.
+
+        Accumulated left to right, so the last entry can differ from
+        :attr:`total` (which uses :func:`math.fsum`) in the final bits. The
+        difference is far below any sleep resolution; use ``total`` when the
+        exact sum matters.
+        """
         running = 0.0
         out = []
         for delay in self.delays:
@@ -167,7 +184,14 @@ class RetryPlanner:
 
     @property
     def rng(self) -> random.Random:
-        """The random source, created on first use when none was supplied."""
+        """The random source, created on first use when none was supplied.
+
+        The lazy creation is not atomic: two threads racing the very first
+        ``plan()`` may each build a generator, and one is discarded. That costs
+        a seed, never a delay, so sharing a planner across threads is safe as
+        long as the first call is made before the threads start -- or pass an
+        ``rng=`` explicitly to skip the question.
+        """
         if self._rng is None:
             self._rng = random.Random()
         return self._rng
@@ -181,7 +205,14 @@ class RetryPlanner:
         if attempt == 1 or policy.factor == 1.0:
             raw = float(policy.base)
         else:
-            exponent = (attempt - 1) * math.log(policy.factor)
+            try:
+                exponent = (attempt - 1) * math.log(policy.factor)
+            except OverflowError:
+                # ``attempt`` is an int too large to convert to float. The cap
+                # applies long before that, so treat it as "past the cap"
+                # rather than letting OverflowError escape the module's
+                # documented "everything invalid raises BackoffError" rule.
+                exponent = math.inf
             if exponent > _MAX_EXPONENT:
                 raw = float(policy.cap)
             else:
@@ -240,6 +271,10 @@ class RetryPlanner:
         honoured verbatim -- not jittered, and not capped by the policy, since a
         server asking for 120s means 120s. It is still bounded by ``deadline``:
         if honouring it would blow the budget, no retries are scheduled at all.
+
+        ``max_attempts`` is capped at :data:`MAX_ATTEMPTS`, because the schedule
+        is materialised as a list and a caller-supplied count from config or a
+        request body would otherwise be an unbounded allocation.
         """
         if isinstance(max_attempts, bool) or not isinstance(max_attempts, int):
             raise BackoffError(
@@ -247,6 +282,10 @@ class RetryPlanner:
             )
         if max_attempts < 0:
             raise BackoffError(f"max_attempts must not be negative, got {max_attempts}")
+        if max_attempts > MAX_ATTEMPTS:
+            raise BackoffError(
+                f"max_attempts must be at most {MAX_ATTEMPTS}, got {max_attempts}"
+            )
 
         budget = None if deadline is None else _require_real(deadline, "deadline")
 
@@ -316,12 +355,13 @@ def parse_retry_after(
         raise BackoffError("retry_after is empty")
 
     if _DELTA_SECONDS.match(text):
-        # int() on an arbitrarily long digit string is cheap enough here, but
-        # cap the magnitude so a 10k-digit header cannot produce an inf sleep.
-        seconds = float(text) if len(text) <= 9 else math.inf
-        if not math.isfinite(seconds):
+        # Strip leading zeros before measuring: the guard is on the magnitude,
+        # not on how many characters the header happened to spend on it, so a
+        # legal-but-padded "0000000120" must still parse as 120.
+        significant = text.lstrip("0")
+        if len(significant) > _MAX_DELTA_DIGITS:
             raise BackoffError("retry_after delta-seconds is out of range")
-        return seconds
+        return float(significant or "0")
 
     try:
         when = parsedate_to_datetime(text)
@@ -335,6 +375,10 @@ def _seconds_until(when: datetime, now: Optional[datetime]) -> float:
     """Seconds from ``now`` until ``when``, floored at zero."""
     if now is None:
         now = datetime.now(timezone.utc)
+    elif not isinstance(now, datetime):
+        # Validated here rather than left to fail as an AttributeError two
+        # lines down: a bad ``now`` is a bad argument, not a surprise.
+        raise BackoffError(f"now must be a datetime, not {type(now).__name__}")
     elif now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
 
