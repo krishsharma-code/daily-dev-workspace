@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mask-kit — input masks that behave</title>
+  <link rel="stylesheet" href="mask-kit.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="masthead">
+      <h1>mask-kit</h1>
+      <p class="lede">
+        Input masks from a tiny pattern language: separators inserted for you,
+        characters that do not fit dropped, and the caret kept where you are
+        typing. Try a field, paste a formatted value into it, or edit in the
+        middle of one.
+      </p>
+    </header>
+
+    <section class="card">
+      <h2>Presets</h2>
+      <p class="muted">
+        Each field is a <code>new MaskInput(input, { preset })</code>. The
+        readout underneath shows what <code>field.value</code> would submit —
+        unmasked, separators stripped.
+      </p>
+      <div id="presets" class="presets"></div>
+    </section>
+
+    <section class="card">
+      <h2>Custom pattern</h2>
+      <p class="muted">
+        <code>0</code> is a digit, <code>A</code> a letter, <code>*</code>
+        either; everything else is a literal. This field is wired straight to
+        <code>applyMask</code> and <code>caretFor</code>.
+      </p>
+
+      <div class="controls">
+        <label class="field">
+          <span class="field-label">Pattern</span>
+          <input id="pattern" type="text" spellcheck="false" autocomplete="off"
+            value="0000-0000-0000" />
+        </label>
+        <label class="field field-narrow">
+          <span class="field-label">Placeholder</span>
+          <input id="placeholder" type="text" maxlength="1" value="_" />
+        </label>
+        <label class="check">
+          <input id="uppercase" type="checkbox" />
+          <span>Uppercase</span>
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Value</span>
+        <input id="value" type="text" spellcheck="false" autocomplete="off"
+          placeholder="type or paste here" />
+      </label>
+
+      <dl class="readouts">
+        <dt>Masked</dt><dd><code id="out-masked">""</code></dd>
+        <dt>Unmasked</dt><dd><code id="out-unmasked">""</code></dd>
+        <dt>Complete</dt><dd><code id="out-complete">false</code></dd>
+        <dt>Slots</dt><dd><code id="out-slots">12</code></dd>
+      </dl>
+    </section>
+
+    <footer class="footer">
+      <p>
+        Open this file directly from disk or serve the folder — the module is a
+        plain ES import, no build step. Run <code>npm test</code> for the suite.
+      </p>
+    </footer>
+  </main>
+
+  <script type="module">
+    import {
+      PRESETS,
+      MaskInput,
+      applyMask,
+      unmask,
+      isComplete,
+      slotCount,
+      caretFor,
+    } from "./mask-kit.js";
+
+    /* ---- Presets ---- */
+
+    const presetsEl = document.getElementById("presets");
+
+    for (const [name, preset] of Object.entries(PRESETS)) {
+      const row = document.createElement("div");
+      row.className = "mask-row";
+
+      const label = document.createElement("label");
+      label.className = "mask-field";
+
+      const caption = document.createElement("span");
+      caption.className = "mask-caption";
+      caption.textContent = preset.label;
+      const tag = document.createElement("code");
+      tag.textContent = name;
+      caption.append(" ", tag);
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "mask-input";
+      input.spellcheck = false;
+      input.autocomplete = "off";
+      input.inputMode = preset.pattern.includes("A") ? "text" : "numeric";
+      input.placeholder = applyMask("", preset.pattern, { placeholder: "_" });
+      input.setAttribute("aria-describedby", `readout-${name}`);
+
+      label.append(caption, input);
+
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = preset.hint;
+
+      const readout = document.createElement("p");
+      readout.className = "readout";
+      readout.id = `readout-${name}`;
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      const value = document.createElement("span");
+      value.className = "value";
+      value.textContent = "—";
+      readout.append(chip, value);
+
+      row.append(label, hint, readout);
+      presetsEl.append(row);
+
+      const total = slotCount(preset.pattern);
+
+      new MaskInput(input, {
+        preset: name,
+        onChange(raw, state) {
+          value.textContent = raw || "—";
+          chip.textContent = state.complete ? "complete" : `${raw.length}/${total}`;
+          chip.dataset.state = state.complete ? "ok" : "partial";
+        },
+      });
+
+      chip.textContent = `0/${total}`;
+      chip.dataset.state = "partial";
+    }
+
+    /* ---- Custom pattern playground ---- */
+
+    const patternInput = document.getElementById("pattern");
+    const placeholderInput = document.getElementById("placeholder");
+    const uppercaseInput = document.getElementById("uppercase");
+    const valueInput = document.getElementById("value");
+    const outMasked = document.getElementById("out-masked");
+    const outUnmasked = document.getElementById("out-unmasked");
+    const outComplete = document.getElementById("out-complete");
+    const outSlots = document.getElementById("out-slots");
+
+    function options() {
+      const placeholder = placeholderInput.value.slice(0, 1) || null;
+      return { placeholder, uppercase: uppercaseInput.checked };
+    }
+
+    function refresh() {
+      const pattern = patternInput.value;
+
+      try {
+        const opts = options();
+        const raw = valueInput.value;
+        const caret = valueInput.selectionStart ?? raw.length;
+
+        const masked = applyMask(raw, pattern, opts);
+        const next = caretFor(raw, caret, pattern, opts);
+
+        if (masked !== raw) valueInput.value = masked;
+        valueInput.setSelectionRange(next, next);
+
+        outMasked.textContent = JSON.stringify(masked);
+        outUnmasked.textContent = JSON.stringify(unmask(masked, pattern));
+        outComplete.textContent = String(isComplete(masked, pattern, opts));
+        outSlots.textContent = String(slotCount(pattern));
+      } catch (error) {
+        outMasked.textContent = error.message;
+      }
+    }
+
+    for (const el of [patternInput, placeholderInput, uppercaseInput]) {
+      el.addEventListener("input", refresh);
+      el.addEventListener("change", refresh);
+    }
+    valueInput.addEventListener("input", refresh);
+
+    refresh();
+  </script>
+</body>
+</html>
