@@ -10,6 +10,7 @@ Standalone front-end work: HTML, CSS, and modern JavaScript components and utili
 - [`fuzzy-matcher/`](fuzzy-matcher/) — fuzzy subsequence matching and ranking for typeahead search.
 - [`form-validate/`](form-validate/) — declarative form validation: one schema, structured errors, sync and async rules.
 - [`keyboard-shortcuts/`](keyboard-shortcuts/) — shortcut registry with chord/sequence matching, scopes and platform-aware labels.
+- [`mask-kit/`](mask-kit/) — input masks from a tiny pattern language: separators inserted for you, caret kept in place, and Indian ID presets (Aadhaar, PAN, GSTIN, IFSC, vehicle).
 - [`sort-kit/`](sort-kit/) — locale-aware comparators and a stable multi-key sorter with natural ordering and direction-independent blank placement.
 - [`storage-kit/`](storage-kit/) — namespaced, TTL-aware store over Web Storage with lazy expiry, quota recovery and safe reads.
 - [`toc-spy/`](toc-spy/) — table of contents generated from headings, with scroll-spy highlighting and accessible anchors.

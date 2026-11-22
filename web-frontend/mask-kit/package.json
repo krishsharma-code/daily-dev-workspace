@@ -1,0 +1,11 @@
+{
+  "name": "mask-kit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Input masks from a tiny pattern language: separators inserted for you, caret kept where you are typing, and Indian ID presets.",
+  "main": "mask-kit.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}
