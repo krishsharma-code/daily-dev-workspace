@@ -10,6 +10,7 @@ Pure Python work: scripts, packages, tests, and middleware.
 - [`dep-graph/`](dep-graph/) — deterministic dependency graph: ordering, layers, cycles, impact
 - [`expr-eval/`](expr-eval/) — safe arithmetic and logic expression evaluator (no `eval`)
 - [`india-id-kit/`](india-id-kit/) — validate, normalise and mask Aadhaar, PAN, GSTIN, IFSC, UPI, mobile, PIN and vehicle IDs
+- [`inr-money/`](inr-money/) — Indian rupee amounts: lakh/crore grouping, half-up rounding, tolerant parsing, amount in words
 - [`json-diff/`](json-diff/) — RFC 6902 JSON Patch diff and apply
 - [`pagination-kit/`](pagination-kit/) — keyset (cursor) pagination with opaque, validated cursors
 - [`rate-limiter/`](rate-limiter/) — token bucket and sliding window rate limiters
