@@ -11,6 +11,7 @@ Standalone front-end work: HTML, CSS, and modern JavaScript components and utili
 - [`form-validate/`](form-validate/) — declarative form validation: one schema, structured errors, sync and async rules.
 - [`keyboard-shortcuts/`](keyboard-shortcuts/) — shortcut registry with chord/sequence matching, scopes and platform-aware labels.
 - [`sort-kit/`](sort-kit/) — locale-aware comparators and a stable multi-key sorter with natural ordering and direction-independent blank placement.
+- [`sse-parser/`](sse-parser/) — spec-correct Server-Sent Events parser: chunk-safe line handling, multi-line data, ids, retry and comments.
 - [`storage-kit/`](storage-kit/) — namespaced, TTL-aware store over Web Storage with lazy expiry, quota recovery and safe reads.
 - [`toc-spy/`](toc-spy/) — table of contents generated from headings, with scroll-spy highlighting and accessible anchors.
 - [`undo-stack/`](undo-stack/) — undo/redo history manager with keystroke coalescing and transactions.

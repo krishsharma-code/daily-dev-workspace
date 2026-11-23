@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>sse-parser — Server-Sent Events playground</title>
+  <link rel="stylesheet" href="sse-parser.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="masthead">
+      <h1>sse-parser</h1>
+      <p class="lede">
+        A dependency-free, spec-correct parser for <code>text/event-stream</code>.
+        Paste a stream, or watch one arrive in awkward little chunks, and see the
+        events that come out. Plain ES import, no build step —
+        <code>npm test</code> runs the suite.
+      </p>
+    </header>
+
+    <section class="grid">
+      <div class="card">
+        <div class="card-head">
+          <h2>Event stream</h2>
+          <span class="hint" id="stream-hint">text/event-stream</span>
+        </div>
+
+        <textarea id="stream" spellcheck="false" aria-label="Event stream input">: stream opened
+
+event: token
+id: 1
+data: {"delta":"Hello"}
+
+event: token
+id: 2
+data: {"delta":" from sse-parser"}
+
+event: done
+id: 3
+retry: 5000
+data: [DONE]
+
+</textarea>
+
+        <div class="controls">
+          <button id="parse" class="btn btn-primary" type="button">Parse once</button>
+          <button id="stream-btn" class="btn" type="button">Stream in chunks</button>
+          <button id="clear" class="btn btn-ghost" type="button">Clear</button>
+          <label class="chunk-size">
+            <span>Chunk</span>
+            <input id="chunk-size" type="range" min="1" max="40" value="7" />
+            <output id="chunk-size-out">7</output>
+          </label>
+        </div>
+
+        <div class="chunks" id="chunks" aria-label="Chunk boundaries"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Parsed events</h2>
+          <span class="hint" id="event-count">0 events</span>
+        </div>
+
+        <ol class="events" id="events"></ol>
+        <p class="empty" id="empty">
+          No events yet — press <strong>Parse once</strong>.
+        </p>
+
+        <dl class="stats">
+          <div><dt>lastEventId</dt><dd id="stat-id">—</dd></div>
+          <div><dt>retry</dt><dd id="stat-retry">—</dd></div>
+          <div><dt>chunks fed</dt><dd id="stat-chunks">0</dd></div>
+          <div><dt>comments</dt><dd id="stat-comments">0</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="card notes">
+      <h2>What it gets right</h2>
+      <ul>
+        <li><code>\n</code>, <code>\r\n</code> and a lone <code>\r</code> all end a line — including a <code>\r\n</code> torn in half by a chunk boundary.</li>
+        <li>Multi-line <code>data:</code> joins with newlines; exactly one space after the colon is stripped.</li>
+        <li><code>id:</code> persists across events (and is ignored if it holds a NUL); <code>retry:</code> is honoured only when all ASCII digits.</li>
+        <li><code>:</code> comment lines are reported, never dispatched — that is how keep-alives work.</li>
+        <li>A leading BOM is dropped, and multi-byte characters split across chunks still decode.</li>
+        <li>An event the stream ended without terminating is discarded, as the spec says.</li>
+      </ul>
+    </section>
+  </main>
+
+  <script type="module">
+    import { SSEParser, DEFAULT_RETRY_MS } from "./sse-parser.js";
+
+    const $ = (id) => document.getElementById(id);
+    const input = $("stream");
+    const eventsList = $("events");
+    const chunksBar = $("chunks");
+    const emptyNote = $("empty");
+    const eventCount = $("event-count");
+    const statId = $("stat-id");
+    const statRetry = $("stat-retry");
+    const statChunks = $("stat-chunks");
+    const statComments = $("stat-comments");
+
+    let parser = new SSEParser();
+    let total = 0;
+    let chunks = 0;
+    let comments = 0;
+    let timer = null;
+
+    function reset() {
+      if (timer) clearInterval(timer);
+      timer = null;
+      parser = new SSEParser();
+      total = 0;
+      chunks = 0;
+      comments = 0;
+      eventsList.replaceChildren();
+      chunksBar.replaceChildren();
+      emptyNote.hidden = false;
+      statId.textContent = "—";
+      statRetry.textContent = "—";
+      statChunks.textContent = "0";
+      statComments.textContent = "0";
+      eventCount.textContent = "0 events";
+      $("stream-btn").textContent = "Stream in chunks";
+    }
+
+    function addEvent(event) {
+      total += 1;
+      emptyNote.hidden = true;
+
+      const li = document.createElement("li");
+      li.className = "event";
+
+      const head = document.createElement("div");
+      head.className = "event-head";
+
+      const badge = document.createElement("span");
+      badge.className = "badge";
+      badge.textContent = event.type;
+      badge.dataset.type = event.type;
+
+      const id = document.createElement("span");
+      id.className = "event-id";
+      id.textContent = event.id ? `id: ${event.id}` : "no id";
+
+      head.append(badge, id);
+
+      const data = document.createElement("pre");
+      data.className = "event-data";
+      data.textContent = event.data === "" ? "(empty data)" : event.data;
+
+      li.append(head, data);
+      eventsList.append(li);
+
+      statId.textContent = event.id || "(empty)";
+      eventCount.textContent = `${total} event${total === 1 ? "" : "s"}`;
+    }
+
+    function feedChunk(text) {
+      chunks += 1;
+      statChunks.textContent = String(chunks);
+
+      const mark = document.createElement("span");
+      mark.className = "chunk";
+      mark.style.setProperty("--w", `${Math.min(text.length, 40)}ch`);
+      mark.textContent = text.length > 12 ? `${text.slice(0, 11)}…` : text;
+      mark.title = JSON.stringify(text);
+      chunksBar.append(mark);
+
+      for (const event of parser.feed(text)) addEvent(event);
+      if (parser.retry !== null) statRetry.textContent = `${parser.retry} ms`;
+      statComments.textContent = String(comments);
+    }
+
+    // The parser is what reports comments; rebuild it with callbacks that count.
+    function makeParser() {
+      return new SSEParser({
+        onComment: () => {
+          comments += 1;
+          statComments.textContent = String(comments);
+        },
+      });
+    }
+
+    $("parse").addEventListener("click", () => {
+      reset();
+      parser = makeParser();
+      feedChunk(input.value);
+      for (const event of parser.end()) addEvent(event);
+      if (parser.retry !== null) statRetry.textContent = `${parser.retry} ms`;
+      else statRetry.textContent = `${DEFAULT_RETRY_MS} ms (default)`;
+    });
+
+    $("stream-btn").addEventListener("click", (e) => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+        e.currentTarget.textContent = "Stream in chunks";
+        return;
+      }
+
+      reset();
+      parser = makeParser();
+      e.currentTarget.textContent = "Stop";
+
+      const size = Number($("chunk-size").value);
+      const text = input.value;
+      let offset = 0;
+
+      timer = setInterval(() => {
+        if (offset >= text.length) {
+          clearInterval(timer);
+          timer = null;
+          for (const event of parser.end()) addEvent(event);
+          if (parser.retry !== null) statRetry.textContent = `${parser.retry} ms`;
+          $("stream-btn").textContent = "Stream in chunks";
+          return;
+        }
+        // Deliberately awkward chunks: the size varies so cuts land mid-line,
+        // mid-CRLF and mid-field.
+        const take = 1 + Math.floor(Math.random() * size);
+        feedChunk(text.slice(offset, offset + take));
+        offset += take;
+      }, 90);
+    });
+
+    $("clear").addEventListener("click", reset);
+
+    $("chunk-size").addEventListener("input", (e) => {
+      $("chunk-size-out").textContent = e.target.value;
+    });
+  </script>
+</body>
+</html>

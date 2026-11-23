@@ -1,0 +1,11 @@
+{
+  "name": "sse-parser",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free, spec-correct Server-Sent Events parser: chunk-safe line handling, multi-line data, ids and retry.",
+  "main": "sse-parser.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}
