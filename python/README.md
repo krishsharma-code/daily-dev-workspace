@@ -9,6 +9,7 @@ Pure Python work: scripts, packages, tests, and middleware.
 - [`data-cleaner/`](data-cleaner/) — clean and normalise tabular records
 - [`dep-graph/`](dep-graph/) — deterministic dependency graph: ordering, layers, cycles, impact
 - [`expr-eval/`](expr-eval/) — safe arithmetic and logic expression evaluator (no `eval`)
+- [`fiscal-year/`](fiscal-year/) — Indian fiscal year (April-March): FY and quarter of a date, bounds, labels and tolerant label parsing
 - [`india-id-kit/`](india-id-kit/) — validate, normalise and mask Aadhaar, PAN, GSTIN, IFSC, UPI, mobile, PIN and vehicle IDs
 - [`inr-money/`](inr-money/) — Indian rupee amounts: lakh/crore grouping, half-up rounding, tolerant parsing, amount in words
 - [`json-diff/`](json-diff/) — RFC 6902 JSON Patch diff and apply
