@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Streak Board &mdash; habits, one day at a time</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand__mark" aria-hidden="true">&#9889;</span>
+        <div>
+          <h1>Streak Board</h1>
+          <p class="brand__tag">Tick off the days you did it</p>
+        </div>
+      </div>
+      <p id="board-meta" class="topbar__note" aria-live="polite">&nbsp;</p>
+    </header>
+
+    <main class="layout">
+      <aside class="panel panel--new">
+        <h2>New habit</h2>
+        <form id="habit-form" class="stack" autocomplete="off">
+          <label>
+            <span>What is the habit?</span>
+            <input
+              name="name"
+              type="text"
+              placeholder="Read 20 pages"
+              maxlength="80"
+              required
+            />
+          </label>
+          <fieldset class="weekdays">
+            <legend>Due on</legend>
+            <div class="weekdays__grid" id="weekday-grid"></div>
+            <p class="hint">
+              Leave every day selected for a daily habit. Unticking days means
+              only those days can break a streak.
+            </p>
+          </fieldset>
+          <button type="submit" class="btn btn--primary">Add habit</button>
+        </form>
+
+        <p class="hint hint--rules">
+          A day you have not ticked yet never breaks a streak &mdash; the day is
+          still going. A missed day in the past does.
+        </p>
+      </aside>
+
+      <section class="panel panel--board">
+        <div class="board__head">
+          <h2>Habits</h2>
+          <div class="board__nav">
+            <button id="prev-week" type="button" class="btn btn--ghost" aria-label="Earlier days">
+              &larr;
+            </button>
+            <button id="today-btn" type="button" class="btn btn--ghost">Today</button>
+            <button id="next-week" type="button" class="btn btn--ghost" aria-label="Later days">
+              &rarr;
+            </button>
+          </div>
+        </div>
+
+        <div id="board-empty" class="empty">
+          <h2>No habits yet</h2>
+          <p>Add one on the left, then start ticking days off.</p>
+        </div>
+
+        <ul id="habit-list" class="habit-list"></ul>
+      </section>
+    </main>
+
+    <p id="toast" class="toast" role="status" aria-live="polite" hidden></p>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
