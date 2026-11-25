@@ -27,6 +27,10 @@ Mixed projects that combine a front end and a back end. Each project is split in
   instant-runoff voting, round by round, with exhausted ballots, disclosed
   tie-breaks and a head-to-head (Condorcet) cross-check: a stdlib Python server
   (REST API, tabulation engine) with a vanilla HTML/CSS/JS console.
+- [`streak-board/`](streak-board/) — track habits and their streaks, with
+  weekday-aware due days, idempotent check-ins and a completion rate measured
+  only against scheduled days: a stdlib Python server (SQLite + REST API,
+  streak engine) with a vanilla HTML/CSS/JS board.
 
 ## Conventions
 
