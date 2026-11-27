@@ -10,6 +10,7 @@ Standalone front-end work: HTML, CSS, and modern JavaScript components and utili
 - [`fuzzy-matcher/`](fuzzy-matcher/) — fuzzy subsequence matching and ranking for typeahead search.
 - [`form-validate/`](form-validate/) — declarative form validation: one schema, structured errors, sync and async rules.
 - [`keyboard-shortcuts/`](keyboard-shortcuts/) — shortcut registry with chord/sequence matching, scopes and platform-aware labels.
+- [`snippet-kit/`](snippet-kit/) — match-centred search snippets with merged, Unicode-safe highlight ranges, HTML escaping and word-boundary ellipsis trimming.
 - [`sort-kit/`](sort-kit/) — locale-aware comparators and a stable multi-key sorter with natural ordering and direction-independent blank placement.
 - [`sse-parser/`](sse-parser/) — spec-correct Server-Sent Events parser: chunk-safe line handling, multi-line data, ids, retry and comments.
 - [`storage-kit/`](storage-kit/) — namespaced, TTL-aware store over Web Storage with lazy expiry, quota recovery and safe reads.

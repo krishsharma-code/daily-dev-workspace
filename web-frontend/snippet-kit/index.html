@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>snippet-kit — search-result snippets that cut on words, not bytes</title>
+  <link rel="stylesheet" href="snippet-kit.css" />
+</head>
+<body>
+  <header class="top">
+    <h1>snippet-kit</h1>
+    <p>Type a query. Each result is a match-centred snippet, escaped and highlighted.</p>
+  </header>
+
+  <main>
+    <div class="controls">
+      <label for="q">
+        Query
+        <input id="q" type="search" value="gst invoice" autocomplete="off" spellcheck="false" />
+      </label>
+      <label for="length">
+        Snippet length
+        <select id="length">
+          <option value="80">80</option>
+          <option value="120" selected>120</option>
+          <option value="200">200</option>
+          <option value="400">400</option>
+        </select>
+      </label>
+      <fieldset>
+        <label><input id="whole-word" type="checkbox" /> whole words only</label>
+      </fieldset>
+    </div>
+
+    <p class="hint">
+      Try <code>"credit note"</code> for a phrase, <code>चालान</code> for Devanagari,
+      or <code>refund</code> for a query that matches nothing.
+    </p>
+
+    <section class="results" id="results" aria-live="polite"></section>
+
+    <section class="panel">
+      <h2>What the first result returned</h2>
+      <pre id="inspect">—</pre>
+    </section>
+  </main>
+
+  <script type="module">
+    import { snippet, snippetHtml, annotate, findMatches } from "./snippet-kit.js";
+
+    const documents = [
+      {
+        id: "TKT-4412",
+        title: "GST invoice does not match the purchase order",
+        body:
+          "Customer raised a ticket because the GST invoice total differs from the purchase order by ₹48. " +
+          "The difference comes from a rounding rule applied to the 12% slab. " +
+          "Support asked the billing team to regenerate the GST invoice and issue a credit note for the gap, " +
+          "so the customer's books close on time for the quarter. The customer has been waiting since 12 November.",
+      },
+      {
+        id: "TKT-4408",
+        title: "Refund not received after cancellation",
+        body:
+          "The order was cancelled on 3 November and the customer was told a refund would arrive in five working days. " +
+          "Nine days later nothing has reached the UPI handle on file. " +
+          "The payment gateway shows a settled refund, so the refund reference needs to be traced with the bank " +
+          "before the customer is told anything else. Escalated to the payments desk.",
+      },
+      {
+        id: "NOTE-88",
+        title: "कर चालान में त्रुटि",
+        body:
+          "ग्राहक ने बताया कि कर चालान में त्रुटि है और चालान की राशि खरीद आदेश से मेल नहीं खाती। " +
+          "टीम ने नया चालान भेजा और क्रेडिट नोट भी संलग्न किया, ताकि ग्राहक की बहीखाता समय पर बंद हो सके। " +
+          "ग्राहक ने दोबारा पुष्टि माँगी है।",
+      },
+      {
+        id: "OPS-19",
+        title: "Warehouse handover delayed by rain",
+        body:
+          "The Bhiwandi warehouse handover slipped by two days after heavy rain flooded the approach road. " +
+          "Invoices for the affected dispatch were held back, and the credit note for the cancelled line was " +
+          "raised once the stock count was reconciled. No customer was charged for the delayed dispatch.",
+      },
+      {
+        id: "TKT-4390",
+        title: "Duplicate debit on card statement",
+        body:
+          "The customer's card statement shows the same order charged twice: once on 8 November and again on 9 November. " +
+          "The duplicate entry is a settlement artefact from a retried authorisation. " +
+          "A refund has been queued and the GST invoice for the second charge must be cancelled so the input credit " +
+          "is not claimed twice. Accounts have been notified.",
+      },
+      {
+        id: "DOC-201",
+        title: "Credit note policy for returns",
+        body:
+          "A credit note is issued within seven days of a returned shipment reaching the warehouse. " +
+          "The note references the original GST invoice number and reverses the tax on the returned line only. " +
+          "If the original invoice covered several shipments, the credit note is split so each shipment keeps its own " +
+          "reference. Refunds follow the credit note, never the reverse.",
+      },
+    ];
+
+    const $q = document.getElementById("q");
+    const $length = document.getElementById("length");
+    const $wholeWord = document.getElementById("whole-word");
+    const $results = document.getElementById("results");
+    const $inspect = document.getElementById("inspect");
+
+    function render() {
+      const query = $q.value;
+      const options = {
+        length: Number($length.value),
+        wholeWord: $wholeWord.checked,
+      };
+
+      $results.replaceChildren();
+
+      if (!query.trim()) {
+        const note = document.createElement("p");
+        note.className = "empty";
+        note.textContent = "Type something to search the six sample tickets.";
+        $results.append(note);
+        $inspect.textContent = "—";
+        return;
+      }
+
+      const hits = [];
+      for (const doc of documents) {
+        // Search the title and body together so a title hit still shows body context.
+        const body = doc.body;
+        const titleRanges = findMatches(doc.title, query, options);
+        const result = snippet(body, query, options);
+        if (titleRanges.length === 0 && result.matched === 0) continue;
+        hits.push({ doc, titleRanges, result });
+      }
+
+      if (hits.length === 0) {
+        const note = document.createElement("p");
+        note.className = "empty";
+        note.textContent = `No document contains “${query}”.`;
+        $results.append(note);
+        $inspect.textContent = "—";
+        return;
+      }
+
+      for (const hit of hits) {
+        const card = document.createElement("article");
+        card.className = "result";
+
+        const heading = document.createElement("h2");
+        heading.innerHTML = snippetHtml(hit.doc.title, query, { ...options, length: hit.doc.title.length });
+        card.append(heading);
+
+        const paragraph = document.createElement("p");
+        paragraph.innerHTML = snippetHtml(hit.doc.body, query, options);
+        card.append(paragraph);
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent =
+          `${hit.doc.id} · ${hit.result.matched} match(es) in the snippet · ` +
+          `${hit.result.text.length} chars shown`;
+        card.append(meta);
+
+        $results.append(card);
+      }
+
+      const first = hits[0];
+      const segments = annotate(first.result.text, query, options);
+      $inspect.textContent = JSON.stringify(
+        {
+          document: first.doc.id,
+          matched: first.result.matched,
+          leadingEllipsis: first.result.leadingEllipsis,
+          trailingEllipsis: first.result.trailingEllipsis,
+          ranges: first.result.ranges,
+          segments: segments.slice(0, 6),
+        },
+        null,
+        2,
+      );
+    }
+
+    $q.addEventListener("input", render);
+    $length.addEventListener("change", render);
+    $wholeWord.addEventListener("change", render);
+    render();
+  </script>
+</body>
+</html>

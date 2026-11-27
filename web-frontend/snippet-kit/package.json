@@ -1,0 +1,11 @@
+{
+  "name": "snippet-kit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free search-result snippets: query parsing, merged match ranges, HTML-safe highlighting and ellipsis windowing that never splits a word, surrogate pair or combining mark.",
+  "main": "snippet-kit.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}
